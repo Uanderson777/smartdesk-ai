@@ -1,37 +1,35 @@
 # SmartDesk AI
 
-Sistema de Service Desk desenvolvido com Python e FastAPI, com evolução planejada para incluir uma base de conhecimento inteligente e recursos de IA.
+Sistema inteligente de Service Desk desenvolvido com Python e FastAPI.
 
-> Projeto de portfólio em desenvolvimento. Esta primeira versão entrega uma API REST para abertura, consulta e atualização de chamados.
-
-## Funcionalidades da versão inicial
-
-- API REST documentada automaticamente com Swagger UI.
-- Abertura de chamados com título, descrição, categoria e prioridade.
-- Listagem e consulta de chamados por identificador.
-- Atualização do status do chamado.
-- Persistência local com SQLite para facilitar a execução inicial.
-- Testes automatizados com Pytest.
+O projeto oferece uma API REST para abertura, consulta e atualização de chamados.
+Está em evolução contínua; este README descreve somente o que está implementado
+atualmente.
 
 ## Tecnologias
 
-- Python 3.13+
+- Python 3.13
 - FastAPI
-- SQLAlchemy 2
+- SQLAlchemy
 - Pydantic
 - SQLite
 - Pytest
 
-## Executar localmente
+## Requisitos
 
-### 1. Clonar o repositório
+- Python 3.13
+- Git
+
+## Instalação e execução
+
+Clone o repositório e entre na pasta do projeto:
 
 ```bash
 git clone https://github.com/Uanderson777/smartdesk-ai.git
 cd smartdesk-ai
 ```
 
-### 2. Criar e ativar o ambiente virtual
+Crie e ative um ambiente virtual.
 
 Windows (PowerShell):
 
@@ -47,43 +45,31 @@ python3.13 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Instalar dependências
+Instale as dependências e inicie a API:
 
 ```bash
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-### 4. Iniciar a API
-
-```bash
 uvicorn app.main:app --reload
 ```
 
-Acesse:
+A API ficará disponível em `http://127.0.0.1:8000`. A documentação interativa
+do FastAPI está em `http://127.0.0.1:8000/docs`.
 
-- API: http://127.0.0.1:8000
-- Swagger UI: http://127.0.0.1:8000/docs
-- OpenAPI: http://127.0.0.1:8000/openapi.json
-
-## Executar os testes
-
-```bash
-pytest -v
-```
-
-## Endpoints iniciais
+## Endpoints disponíveis
 
 | Método | Endpoint | Descrição |
 |---|---|---|
-| GET | `/` | Informações do serviço |
-| GET | `/health` | Verifica a saúde da API |
-| POST | `/api/v1/tickets` | Abre um chamado |
-| GET | `/api/v1/tickets` | Lista chamados |
-| GET | `/api/v1/tickets/{ticket_id}` | Consulta um chamado |
-| PATCH | `/api/v1/tickets/{ticket_id}/status` | Atualiza o status |
+| GET | `/` | Retorna informações do serviço. |
+| GET | `/health` | Verifica a disponibilidade da API. |
+| POST | `/api/v1/tickets` | Cria um chamado. |
+| GET | `/api/v1/tickets` | Lista chamados; aceita `skip` e `limit` para paginação. |
+| GET | `/api/v1/tickets/{ticket_id}` | Busca um chamado pelo identificador. |
+| PATCH | `/api/v1/tickets/{ticket_id}/status` | Atualiza o status de um chamado. |
 
-## Exemplo de abertura de chamado
+### Exemplo de criação de chamado
+
+Envie para `POST /api/v1/tickets`:
 
 ```json
 {
@@ -94,20 +80,29 @@ pytest -v
 }
 ```
 
-## Roadmap
+## Testes automatizados
 
-- [x] Estrutura inicial da API e documentação
-- [ ] Autenticação JWT e controle de acesso por perfil
-- [ ] Banco PostgreSQL e migrations com Alembic
-- [ ] Gestão de técnicos e atribuição de chamados
-- [ ] Histórico de alterações e métricas
-- [ ] Base de conhecimento
-- [ ] Busca semântica e sugestões com IA/RAG
-- [ ] Docker e integração contínua com GitHub Actions
+Execute a suíte a partir da raiz do projeto:
 
-## Status
+```bash
+pytest -v
+```
 
-Em desenvolvimento. As funcionalidades marcadas como pendentes ainda não estão implementadas.
+Os testes utilizam SQLite em memória, sem alterar o banco de desenvolvimento.
+
+Último resultado registrado da suíte:
+
+- 8 testes aprovados
+- 0 falhas
+- 1 aviso de depreciação relacionado à integração entre `httpx` e
+  `starlette.testclient`
+
+## Estado do desenvolvimento
+
+O SmartDesk AI está em evolução contínua. A implementação atual cobre os
+endpoints de chamados listados acima; funcionalidades futuras, como autenticação,
+gestão de técnicos e recursos de inteligência artificial, ainda não estão
+implementadas.
 
 ## Autor
 
