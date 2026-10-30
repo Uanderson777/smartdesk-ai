@@ -41,6 +41,18 @@ def test_health_check(client):
     assert response.json()["status"] == "ok"
 
 
+def test_root_returns_service_info(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.json() == {
+        "service": "SmartDesk AI",
+        "version": "0.1.0",
+        "description": "API inteligente de gerenciamento de chamados de Service Desk",
+        "status": "online",
+        "documentation": "/docs",
+    }
+
+
 def test_create_and_read_ticket(client):
     payload = {
         "title": "Computador sem internet",

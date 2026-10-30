@@ -76,6 +76,7 @@ pytest -v
 
 | Método | Endpoint | Descrição |
 |---|---|---|
+| GET | `/` | Informações do serviço |
 | GET | `/health` | Verifica a saúde da API |
 | POST | `/api/v1/tickets` | Abre um chamado |
 | GET | `/api/v1/tickets` | Lista chamados |

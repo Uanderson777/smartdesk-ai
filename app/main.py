@@ -26,6 +26,17 @@ app = FastAPI(
 )
 
 
+@app.get("/", tags=["Health"])
+def root():
+    return {
+        "service": "SmartDesk AI",
+        "version": "0.1.0",
+        "description": "API inteligente de gerenciamento de chamados de Service Desk",
+        "status": "online",
+        "documentation": "/docs",
+    }
+
+
 @app.get("/health", tags=["Health"])
 def health_check():
     return {"status": "ok", "service": "SmartDesk AI"}
