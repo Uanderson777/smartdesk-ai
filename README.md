@@ -2,15 +2,17 @@
 
 Sistema inteligente de Service Desk desenvolvido com Python e FastAPI.
 
-O projeto oferece uma API REST para abertura, consulta e atualização de chamados.
-Está em evolução contínua; este README descreve somente o que está implementado
-atualmente.
+O SmartDesk AI oferece uma API REST para autenticação, gestão de usuários e
+atendimento de chamados com controle de acesso baseado em perfis. O projeto
+está em evolução contínua; esta documentação descreve somente o que está
+implementado atualmente.
 
 ## Tecnologias
 
 - Python 3.13
 - FastAPI
 - SQLAlchemy
+- Alembic
 - Pydantic
 - SQLite
 - PyJWT
@@ -22,7 +24,7 @@ atualmente.
 - Python 3.13
 - Git
 
-## Instalação e execução
+## Instalação e configuração
 
 Clone o repositório e entre na pasta do projeto:
 
@@ -54,43 +56,118 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Configure uma chave JWT com pelo menos 32 bytes e inicie a API.
+O banco padrão é `sqlite:///./smartdesk.db`. Para apontar a aplicação a outro
+banco compatível com SQLAlchemy, defina `DATABASE_URL` antes de iniciar a API
+ou executar o comando de bootstrap.
+
+Configure `JWT_SECRET_KEY` com pelo menos 32 bytes. Gere uma chave forte e
+mantenha-a em uma configuração segura do ambiente; não a inclua no código, no
+Git ou em mensagens:
 
 Windows (PowerShell):
 
 ```powershell
 $env:JWT_SECRET_KEY = python -c "import secrets; print(secrets.token_urlsafe(32))"
-uvicorn app.main:app --reload
 ```
 
 Linux/macOS:
 
 ```bash
 export JWT_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+```
+
+Os arquivos `.env` são ignorados pelo Git. Configure variáveis de ambiente em
+cada sessão ou use uma solução de gerenciamento de segredos apropriada ao
+ambiente de implantação.
+
+## Migrations e primeiro administrador
+
+As migrations do Alembic são aplicadas automaticamente quando a API inicia.
+Elas criam ou atualizam as tabelas necessárias, incluindo a associação dos
+chamados aos usuários. Chamados existentes são preservados; registros
+históricos sem proprietário permanecem com `requester_id` nulo.
+
+Antes do primeiro login administrativo, crie o primeiro administrador:
+
+```bash
+python -m app.bootstrap_admin admin@example.com
+```
+
+O comando aplica as migrations, solicita a senha de forma interativa caso o
+usuário ainda não exista e cria sua conta. Se o usuário já existir, ele pode
+ser promovido a administrador. O comando não permite prosseguir quando já
+existe um administrador ativo.
+
+## Inicialização da API
+
+Com o ambiente virtual ativado e `JWT_SECRET_KEY` configurada, execute:
+
+```bash
 uvicorn app.main:app --reload
 ```
 
 A API ficará disponível em `http://127.0.0.1:8000`. A documentação interativa
 do FastAPI está em `http://127.0.0.1:8000/docs`.
 
+## Autenticação e autorização
+
+Cadastre-se em `POST /api/v1/auth/register` e autentique-se em
+`POST /api/v1/auth/login`. O cadastro público sempre cria um solicitante; não
+é possível escolher um perfil privilegiado pelo endpoint público. Senhas têm
+no mínimo 8 caracteres e são armazenadas com hash Argon2id.
+
+O login retorna um token JWT com validade de 30 minutos. Envie-o nas rotas
+protegidas pelo cabeçalho:
+
+```http
+Authorization: Bearer <token>
+```
+
+As rotas `/` e `/health` são públicas. Tokens inválidos, expirados ou de contas
+desativadas resultam em HTTP `401`; usuário autenticado sem permissão recebe
+HTTP `403`. O perfil atual é consultado no banco a cada requisição protegida.
+
+### Perfis e permissões
+
+| Perfil | Permissões |
+|---|---|
+| Solicitante (`requester`) | Abre chamados e lista ou consulta somente os próprios chamados. Não altera status. |
+| Técnico (`technician`) | Consulta chamados disponíveis e os atribuídos a si, assume chamados disponíveis e atualiza o status dos chamados atribuídos a si. |
+| Administrador (`admin`) | Consulta e gerencia chamados, inclusive registros históricos sem proprietário; gerencia perfis e ativações de usuários; atribui ou remove técnicos dos chamados. |
+
+Todo chamado novo recebe automaticamente o usuário autenticado como
+proprietário. Solicitantes não acessam chamados de terceiros. Chamados legados
+sem proprietário não são exibidos a solicitantes ou técnicos; somente
+administradores podem visualizá-los. A API valida essas permissões no servidor.
+
+Administradores podem ativar, desativar e alterar o perfil dos usuários. Não
+há exclusão definitiva de usuários, para preservar o histórico. Usuários
+desativados não podem fazer login e seus tokens existentes deixam de autorizar
+requisições. O sistema impede desativar ou rebaixar o último administrador
+ativo.
+
 ## Endpoints disponíveis
 
-| Método | Endpoint | Descrição |
+| Método | Endpoint | Acesso e descrição |
 |---|---|---|
-| GET | `/` | Retorna informações do serviço. |
-| GET | `/health` | Verifica a disponibilidade da API. |
-| POST | `/api/v1/auth/register` | Cadastra um usuário. |
-| POST | `/api/v1/auth/login` | Autentica o usuário e retorna um token JWT. |
-| POST | `/api/v1/tickets` | Cria um chamado (requer autenticação Bearer). |
-| GET | `/api/v1/tickets` | Lista chamados (requer autenticação; aceita `skip` e `limit`). |
-| GET | `/api/v1/tickets/{ticket_id}` | Busca um chamado por ID (requer autenticação). |
-| PATCH | `/api/v1/tickets/{ticket_id}/status` | Atualiza o status (requer autenticação). |
+| GET | `/` | Público; retorna informações do serviço. |
+| GET | `/health` | Público; verifica a disponibilidade da API. |
+| POST | `/api/v1/auth/register` | Público; cadastra um solicitante. |
+| POST | `/api/v1/auth/login` | Público; autentica e retorna um token JWT. |
+| GET | `/api/v1/users` | Administrador; lista usuários. |
+| PATCH | `/api/v1/users/{user_id}/role` | Administrador; altera o perfil de usuário. |
+| PATCH | `/api/v1/users/{user_id}/active` | Administrador; ativa ou desativa uma conta. |
+| POST | `/api/v1/tickets` | Solicitante ou administrador; cria um chamado. |
+| GET | `/api/v1/tickets` | Autenticado; lista chamados conforme o perfil. |
+| GET | `/api/v1/tickets/available` | Técnico ou administrador; lista chamados disponíveis. |
+| POST | `/api/v1/tickets/{ticket_id}/claim` | Técnico; assume um chamado disponível. |
+| PATCH | `/api/v1/tickets/{ticket_id}/assignee` | Administrador; atribui ou remove a atribuição de um técnico. |
+| GET | `/api/v1/tickets/{ticket_id}` | Autenticado; consulta um chamado conforme as permissões do perfil. |
+| PATCH | `/api/v1/tickets/{ticket_id}/status` | Técnico atribuído ou administrador; atualiza o status. |
 
-Cadastro e login recebem JSON. As senhas precisam ter pelo menos 8 caracteres;
-elas são armazenadas com hash Argon2id. Para chamar as rotas de chamados, envie
-o token retornado no login no cabeçalho `Authorization: Bearer <token>`.
+### Exemplo de login
 
-Exemplo de login:
+Envie um JSON para `POST /api/v1/auth/login`:
 
 ```json
 {
@@ -99,12 +176,10 @@ Exemplo de login:
 }
 ```
 
-O segredo `JWT_SECRET_KEY` deve ser mantido fora do repositório e configurado
-em cada ambiente. Tokens de acesso expiram após 30 minutos.
-
 ### Exemplo de criação de chamado
 
-Envie para `POST /api/v1/tickets`:
+Envie um JSON para `POST /api/v1/tickets` com um token de solicitante ou
+administrador:
 
 ```json
 {
@@ -117,27 +192,22 @@ Envie para `POST /api/v1/tickets`:
 
 ## Testes automatizados
 
-Execute a suíte a partir da raiz do projeto:
+Com as dependências instaladas e o ambiente virtual ativado, execute a partir
+da raiz do projeto:
 
 ```bash
 pytest -v
 ```
 
-Os testes utilizam SQLite em memória, sem alterar o banco de desenvolvimento.
-
-Último resultado registrado da suíte:
-
-- 8 testes aprovados
-- 0 falhas
-- 1 aviso de depreciação relacionado à integração entre `httpx` e
-  `starlette.testclient`
+Os testes utilizam SQLite em memória ou bancos temporários para cobrir
+autenticação, permissões por perfil, operações administrativas simultâneas e
+migrations de bancos legados, sem alterar o banco local de desenvolvimento.
 
 ## Estado do desenvolvimento
 
-O SmartDesk AI está em evolução contínua. A implementação atual cobre os
-endpoints de chamados listados acima; funcionalidades futuras, como autenticação,
-gestão de técnicos e recursos de inteligência artificial, ainda não estão
-implementadas.
+O SmartDesk AI está em evolução contínua. A implementação atual inclui
+autenticação JWT, perfis de acesso, gestão de usuários, migrations e fluxo de
+atendimento de chamados.
 
 ## Autor
 

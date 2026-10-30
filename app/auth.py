@@ -25,7 +25,11 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
             detail="E-mail já cadastrado.",
         )
 
-    user = User(email=email, password_hash=hash_password(payload.password))
+    user = User(
+        email=email,
+        password_hash=hash_password(payload.password),
+        role="requester",
+    )
     db.add(user)
     try:
         db.commit()
@@ -43,7 +47,11 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
 def login(payload: UserLogin, db: Session = Depends(get_db)):
     email = str(payload.email).lower()
     user = db.scalar(select(User).where(User.email == email))
-    if user is None or not verify_password(payload.password, user.password_hash):
+    if (
+        user is None
+        or not user.is_active
+        or not verify_password(payload.password, user.password_hash)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="E-mail ou senha inválidos.",

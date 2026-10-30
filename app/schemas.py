@@ -3,6 +3,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from app.models import UserRole
+
 
 class TicketCategory(str, Enum):
     hardware = "hardware"
@@ -38,6 +40,10 @@ class TicketStatusUpdate(BaseModel):
     status: TicketStatus
 
 
+class TicketAssigneeUpdate(BaseModel):
+    technician_id: int | None
+
+
 class TicketRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -47,6 +53,8 @@ class TicketRead(BaseModel):
     category: TicketCategory
     priority: TicketPriority
     status: TicketStatus
+    requester_id: int | None
+    assigned_technician_id: int | None
     created_at: datetime
     updated_at: datetime
 
@@ -64,6 +72,19 @@ class UserLogin(BaseModel):
 class UserRead(BaseModel):
     id: int
     email: EmailStr
+
+
+class AdminUserRead(UserRead):
+    role: UserRole
+    is_active: bool
+
+
+class UserRoleUpdate(BaseModel):
+    role: UserRole
+
+
+class UserActiveUpdate(BaseModel):
+    is_active: bool
 
 
 class AccessToken(BaseModel):
