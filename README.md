@@ -13,6 +13,8 @@ atualmente.
 - SQLAlchemy
 - Pydantic
 - SQLite
+- PyJWT
+- pwdlib com Argon2id
 - Pytest
 
 ## Requisitos
@@ -45,11 +47,26 @@ python3.13 -m venv .venv
 source .venv/bin/activate
 ```
 
-Instale as dependências e inicie a API:
+Instale as dependências:
 
 ```bash
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+```
+
+Configure uma chave JWT com pelo menos 32 bytes e inicie a API.
+
+Windows (PowerShell):
+
+```powershell
+$env:JWT_SECRET_KEY = python -c "import secrets; print(secrets.token_urlsafe(32))"
+uvicorn app.main:app --reload
+```
+
+Linux/macOS:
+
+```bash
+export JWT_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 uvicorn app.main:app --reload
 ```
 
@@ -62,10 +79,28 @@ do FastAPI está em `http://127.0.0.1:8000/docs`.
 |---|---|---|
 | GET | `/` | Retorna informações do serviço. |
 | GET | `/health` | Verifica a disponibilidade da API. |
-| POST | `/api/v1/tickets` | Cria um chamado. |
-| GET | `/api/v1/tickets` | Lista chamados; aceita `skip` e `limit` para paginação. |
-| GET | `/api/v1/tickets/{ticket_id}` | Busca um chamado pelo identificador. |
-| PATCH | `/api/v1/tickets/{ticket_id}/status` | Atualiza o status de um chamado. |
+| POST | `/api/v1/auth/register` | Cadastra um usuário. |
+| POST | `/api/v1/auth/login` | Autentica o usuário e retorna um token JWT. |
+| POST | `/api/v1/tickets` | Cria um chamado (requer autenticação Bearer). |
+| GET | `/api/v1/tickets` | Lista chamados (requer autenticação; aceita `skip` e `limit`). |
+| GET | `/api/v1/tickets/{ticket_id}` | Busca um chamado por ID (requer autenticação). |
+| PATCH | `/api/v1/tickets/{ticket_id}/status` | Atualiza o status (requer autenticação). |
+
+Cadastro e login recebem JSON. As senhas precisam ter pelo menos 8 caracteres;
+elas são armazenadas com hash Argon2id. Para chamar as rotas de chamados, envie
+o token retornado no login no cabeçalho `Authorization: Bearer <token>`.
+
+Exemplo de login:
+
+```json
+{
+  "email": "usuario@example.com",
+  "password": "uma-senha-segura"
+}
+```
+
+O segredo `JWT_SECRET_KEY` deve ser mantido fora do repositório e configurado
+em cada ambiente. Tokens de acesso expiram após 30 minutos.
 
 ### Exemplo de criação de chamado
 
