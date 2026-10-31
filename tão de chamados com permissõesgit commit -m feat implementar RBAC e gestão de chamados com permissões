@@ -1,0 +1,16 @@
+ README.md                                          | 146 [32m++++[m[31m--[m
+ alembic.ini                                        |   5 [32m+[m
+ app/auth.py                                        |  12 [32m+[m[31m-[m
+ app/bootstrap_admin.py                             |  46 [32m++[m
+ app/database.py                                    |  15 [32m+[m
+ app/dependencies.py                                |  18 [32m+[m[31m-[m
+ app/main.py                                        | 190 [32m++++++[m[31m-[m
+ app/models.py                                      |  19 [32m+[m[31m-[m
+ app/schemas.py                                     |  21 [32m+[m
+ app/users.py                                       | 107 [32m++++[m
+ migrations/env.py                                  |  53 [32m++[m
+ migrations/script.py.mako                          |  23 [32m+[m
+ .../20261030_0001_rbac_and_ticket_ownership.py     | 165 [32m++++++[m
+ requirements.txt                                   |   1 [32m+[m
+ tests/test_api.py                                  | 565 [32m++++++++++++++++++++[m[31m-[m
+ 15 files changed, 1319 insertions(+), 67 deletions(-)

@@ -5,7 +5,7 @@ from pydantic import EmailStr, TypeAdapter
 from sqlalchemy import select
 
 from app.database import SessionLocal, engine, run_migrations
-from app.models import User, UserRole
+from app.models import Company, Membership, User, UserRole
 from app.security import hash_password
 
 
@@ -19,13 +19,22 @@ def main() -> None:
 
     run_migrations(engine)
     with SessionLocal() as db:
+        companies = db.scalars(select(Company).order_by(Company.id).limit(2)).all()
+        if len(companies) != 1:
+            parser.error(
+                "Bootstrap requires exactly one company; select the company explicitly "
+                "before bootstrapping in a multi-company database."
+            )
+        company = companies[0]
         if db.scalar(
-            select(User.id).where(
-                User.role == UserRole.ADMIN,
-                User.is_active.is_(True),
+            select(Membership.id).where(
+                Membership.company_id == company.id,
+                Membership.role == UserRole.ADMIN,
+                Membership.is_active.is_(True),
+                Membership.user.has(User.is_active.is_(True)),
             )
         ):
-            parser.error("An active administrator already exists.")
+            parser.error("An active company administrator already exists.")
 
         user = db.scalar(select(User).where(User.email == email))
         if user is None:
@@ -38,6 +47,23 @@ def main() -> None:
 
         user.role = UserRole.ADMIN
         user.is_active = True
+        membership = db.scalar(
+            select(Membership).where(
+                Membership.user_id == user.id,
+                Membership.company_id == company.id,
+            )
+        )
+        if membership is None:
+            membership = Membership(
+                user_id=user.id,
+                company_id=company.id,
+                role=UserRole.ADMIN,
+                is_active=True,
+            )
+            db.add(membership)
+        else:
+            membership.role = UserRole.ADMIN
+            membership.is_active = True
         db.commit()
     print(f"Administrator ready: {email}")
 

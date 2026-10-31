@@ -1,13 +1,13 @@
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import router as auth_router
 from app.database import engine, get_db, run_migrations
-from app.dependencies import get_current_user, require_roles
-from app.models import Ticket, User, UserRole
+from app.dependencies import TenantContext, get_tenant_context, require_roles
+from app.models import Membership, Ticket, User, UserRole
 from app.schemas import (
     TicketAssigneeUpdate,
     TicketCreate,
@@ -16,6 +16,65 @@ from app.schemas import (
 )
 from app.security import get_jwt_secret
 from app.users import router as users_router
+
+
+def lock_ticket(
+    db: Session,
+    ticket_id: int,
+    context: TenantContext,
+) -> Ticket | None:
+    if db.get_bind().dialect.name == "sqlite":
+        db.rollback()
+        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+
+    ticket = db.scalar(
+        select(Ticket)
+        .where(
+            Ticket.id == ticket_id,
+            Ticket.tenant_id == context.tenant_id,
+        )
+        .with_for_update()
+    )
+    if ticket is None:
+        return None
+
+    active_membership = db.scalar(
+        select(Membership)
+        .join(User, User.id == Membership.user_id)
+        .where(
+            Membership.user_id == context.user_id,
+            Membership.company_id == context.tenant_id,
+            Membership.role == context.role,
+            Membership.is_active.is_(True),
+            User.is_active.is_(True),
+        )
+        .with_for_update()
+    )
+    if active_membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Selecione uma empresa com participação ativa.",
+        )
+    return ticket
+
+
+def active_technician_membership(
+    db: Session,
+    technician_id: int,
+    tenant_id: int,
+) -> Membership | None:
+    return db.scalar(
+        select(Membership)
+        .join(User, User.id == Membership.user_id)
+        .where(
+            Membership.user_id == technician_id,
+            Membership.company_id == tenant_id,
+            Membership.role == UserRole.TECHNICIAN,
+            Membership.is_active.is_(True),
+            User.is_active.is_(True),
+        )
+        .with_for_update()
+    )
 
 
 @asynccontextmanager
@@ -63,9 +122,9 @@ def health_check():
 def create_ticket(
     payload: TicketCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    context: TenantContext = Depends(get_tenant_context),
 ):
-    if current_user.role not in (UserRole.REQUESTER, UserRole.ADMIN):
+    if context.role not in (UserRole.REQUESTER, UserRole.ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Você não tem permissão para abrir chamados.",
@@ -75,7 +134,8 @@ def create_ticket(
         description=payload.description,
         category=payload.category.value,
         priority=payload.priority.value,
-        requester_id=current_user.id,
+        requester_id=context.user_id,
+        tenant_id=context.tenant_id,
     )
     db.add(ticket)
     db.commit()
@@ -88,16 +148,16 @@ def list_tickets(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    context: TenantContext = Depends(get_tenant_context),
 ):
-    statement = select(Ticket)
-    if current_user.role == UserRole.REQUESTER:
-        statement = statement.where(Ticket.requester_id == current_user.id)
-    elif current_user.role == UserRole.TECHNICIAN:
+    statement = select(Ticket).where(Ticket.tenant_id == context.tenant_id)
+    if context.role == UserRole.REQUESTER:
+        statement = statement.where(Ticket.requester_id == context.user_id)
+    elif context.role == UserRole.TECHNICIAN:
         statement = statement.where(
             Ticket.requester_id.is_not(None),
             (Ticket.assigned_technician_id.is_(None))
-            | (Ticket.assigned_technician_id == current_user.id),
+            | (Ticket.assigned_technician_id == context.user_id),
         )
     statement = statement.order_by(Ticket.created_at.desc()).offset(skip).limit(limit)
     return list(db.scalars(statement).all())
@@ -112,11 +172,14 @@ def list_available_tickets(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.TECHNICIAN)),
+    context: TenantContext = Depends(
+        require_roles(UserRole.ADMIN, UserRole.TECHNICIAN)
+    ),
 ):
     statement = (
         select(Ticket)
         .where(
+            Ticket.tenant_id == context.tenant_id,
             Ticket.requester_id.is_not(None),
             Ticket.assigned_technician_id.is_(None),
         )
@@ -131,19 +194,24 @@ def list_available_tickets(
 def get_ticket(
     ticket_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    context: TenantContext = Depends(get_tenant_context),
 ):
-    ticket = db.get(Ticket, ticket_id)
+    ticket = db.scalar(
+        select(Ticket).where(
+            Ticket.id == ticket_id,
+            Ticket.tenant_id == context.tenant_id,
+        )
+    )
     if ticket is None:
         raise HTTPException(status_code=404, detail="Chamado não encontrado.")
-    if current_user.role == UserRole.REQUESTER and ticket.requester_id != current_user.id:
+    if context.role == UserRole.REQUESTER and ticket.requester_id != context.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Você não tem permissão para visualizar este chamado.",
         )
-    if current_user.role == UserRole.TECHNICIAN and (
+    if context.role == UserRole.TECHNICIAN and (
         ticket.requester_id is None
-        or ticket.assigned_technician_id not in (None, current_user.id)
+        or ticket.assigned_technician_id not in (None, context.user_id)
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -161,24 +229,34 @@ def update_ticket_status(
     ticket_id: int,
     payload: TicketStatusUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    context: TenantContext = Depends(get_tenant_context),
 ):
-    ticket = db.get(Ticket, ticket_id)
+    ticket = lock_ticket(db, ticket_id, context)
     if ticket is None:
         raise HTTPException(status_code=404, detail="Chamado não encontrado.")
-    if current_user.role == UserRole.REQUESTER:
+    if context.role == UserRole.REQUESTER:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solicitantes não podem atualizar o status dos chamados.",
         )
     if (
-        current_user.role == UserRole.TECHNICIAN
-        and ticket.assigned_technician_id != current_user.id
+        context.role == UserRole.TECHNICIAN
+        and ticket.assigned_technician_id != context.user_id
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Técnicos só podem atualizar chamados atribuídos a eles.",
         )
+    if payload.status.value == "em_atendimento":
+        if ticket.assigned_technician_id is None or active_technician_membership(
+            db,
+            ticket.assigned_technician_id,
+            context.tenant_id,
+        ) is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="O chamado precisa de um técnico ativo atribuído para iniciar o atendimento.",
+            )
 
     ticket.status = payload.status.value
     db.commit()
@@ -194,47 +272,35 @@ def update_ticket_status(
 def claim_ticket(
     ticket_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    context: TenantContext = Depends(get_tenant_context),
 ):
-    if current_user.role != UserRole.TECHNICIAN:
+    if context.role != UserRole.TECHNICIAN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Somente técnicos podem assumir chamados.",
         )
-    result = db.execute(
-        update(Ticket)
-        .where(
-            Ticket.id == ticket_id,
-            Ticket.requester_id.is_not(None),
-            Ticket.assigned_technician_id.is_(None),
+    ticket = lock_ticket(db, ticket_id, context)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado.")
+    if ticket.requester_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Chamados históricos sem solicitante não podem ser assumidos.",
         )
-        .values(
-            assigned_technician_id=current_user.id,
-            status="em_atendimento",
-        )
-    )
-    if result.rowcount != 1:
-        db.rollback()
-        ticket = db.get(Ticket, ticket_id)
-        if ticket is None:
-            raise HTTPException(status_code=404, detail="Chamado não encontrado.")
-        if ticket.requester_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Chamados históricos sem solicitante não podem ser assumidos.",
-            )
+    if ticket.assigned_technician_id is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Chamado já está atribuído.",
         )
-
-    db.commit()
-    ticket = db.get(Ticket, ticket_id)
-    if ticket is None:
+    if active_technician_membership(db, context.user_id, context.tenant_id) is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Chamado não encontrado.",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Somente técnicos ativos da empresa podem assumir chamados.",
         )
+
+    ticket.assigned_technician_id = context.user_id
+    ticket.status = "em_atendimento"
+    db.commit()
     db.refresh(ticket)
     return ticket
 
@@ -248,9 +314,9 @@ def assign_ticket(
     ticket_id: int,
     payload: TicketAssigneeUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.ADMIN)),
+    context: TenantContext = Depends(require_roles(UserRole.ADMIN)),
 ):
-    ticket = db.get(Ticket, ticket_id)
+    ticket = lock_ticket(db, ticket_id, context)
     if ticket is None:
         raise HTTPException(status_code=404, detail="Chamado não encontrado.")
     if ticket.requester_id is None:
@@ -258,24 +324,30 @@ def assign_ticket(
             status_code=status.HTTP_409_CONFLICT,
             detail="Chamados históricos sem solicitante não podem ser atribuídos.",
         )
-
-    technician = (
-        db.get(User, payload.technician_id)
-        if payload.technician_id is not None
-        else None
-    )
-    if payload.technician_id is not None and (
-        technician is None
-        or technician.role != UserRole.TECHNICIAN
-        or not technician.is_active
+    if (
+        payload.technician_id is None
+        and ticket.status == "em_atendimento"
     ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Altere o status do chamado antes de desatribuir o técnico.",
+        )
+
+    technician_membership = None
+    if payload.technician_id is not None:
+        technician_membership = active_technician_membership(
+            db,
+            payload.technician_id,
+            context.tenant_id,
+        )
+    if payload.technician_id is not None and technician_membership is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="O usuário informado não é um técnico ativo.",
         )
 
     ticket.assigned_technician_id = (
-        technician.id if technician is not None else None
+        technician_membership.user_id if technician_membership is not None else None
     )
     db.commit()
     db.refresh(ticket)

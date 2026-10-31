@@ -11,6 +11,9 @@ implementado atualmente.
 
 - Python 3.13
 - FastAPI
+- React
+- TypeScript
+- Vite
 - SQLAlchemy
 - Alembic
 - Pydantic
@@ -108,6 +111,45 @@ uvicorn app.main:app --reload
 
 A API ficará disponível em `http://127.0.0.1:8000`. A documentação interativa
 do FastAPI está em `http://127.0.0.1:8000/docs`.
+
+## Dashboard web
+
+O frontend React + TypeScript fica em `frontend/` e usa o Vite durante o
+desenvolvimento. Em um terminal, inicie primeiro a API com a configuração
+descrita acima. Em outro terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Abra `http://127.0.0.1:5173`. O servidor Vite encaminha as chamadas `/api` para
+`http://127.0.0.1:8000`. Se a API estiver em outro endereço, defina
+`SMARTDESK_API_URL` antes de iniciar o servidor de desenvolvimento.
+
+Para gerar os arquivos otimizados de produção, execute dentro de `frontend/`:
+
+```bash
+npm run build
+```
+
+O resultado é gravado em `frontend/dist/`. Em produção, sirva o frontend e
+encaminhe `/api` à API no mesmo domínio, ou configure `VITE_API_BASE_URL` no
+build para apontar ao endereço da API com CORS configurado no ambiente.
+
+O Dashboard usa os endpoints de chamados e usuários existentes. Os indicadores,
+gráficos e filtros são calculados sobre os registros retornados pela API dentro
+do escopo permitido ao usuário. Administradores veem a visão geral e gerenciam
+atribuições; técnicos acessam a fila disponível e seus chamados; solicitantes
+acompanham os próprios chamados e podem abrir novos.
+
+O token JWT é mantido somente na memória da aplicação e enviado como
+`Authorization: Bearer`. Ele não é gravado em `localStorage` ou
+`sessionStorage`; portanto, atualizar ou fechar a página encerra a sessão e
+exige novo login. O backend não oferece refresh token. A API ainda não mantém
+eventos de alteração de chamados, então os detalhes mostram a criação e a
+última atualização disponíveis, não uma trilha histórica de status.
 
 ## Autenticação e autorização
 

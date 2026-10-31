@@ -29,6 +29,7 @@ def verify_password(password: str, hashed_password: str) -> bool:
 def create_access_token(
     subject: str,
     expires_delta: timedelta | None = None,
+    tenant_id: int | None = None,
 ) -> str:
     expires_at = datetime.now(timezone.utc) + (
         expires_delta
@@ -36,10 +37,12 @@ def create_access_token(
         else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     payload = {"sub": subject, "exp": expires_at}
+    if tenant_id is not None:
+        payload["tenant_id"] = tenant_id
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
-def decode_access_token(token: str) -> str:
+def decode_access_token_claims(token: str) -> tuple[str, int | None]:
     payload = jwt.decode(
         token,
         get_jwt_secret(),
@@ -48,4 +51,14 @@ def decode_access_token(token: str) -> str:
     subject = payload.get("sub")
     if not isinstance(subject, str) or not subject.isdecimal():
         raise jwt.InvalidTokenError("Invalid token subject.")
+    tenant_id = payload.get("tenant_id")
+    if tenant_id is not None and (
+        isinstance(tenant_id, bool) or not isinstance(tenant_id, int) or tenant_id < 1
+    ):
+        raise jwt.InvalidTokenError("Invalid token tenant.")
+    return subject, tenant_id
+
+
+def decode_access_token(token: str) -> str:
+    subject, _ = decode_access_token_claims(token)
     return subject

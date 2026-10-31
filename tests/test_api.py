@@ -1,9 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from pathlib import Path
 from threading import Barrier
 
 import jwt
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -12,10 +15,11 @@ from sqlalchemy.pool import StaticPool
 
 from app import main as main_module
 from app.database import Base, get_db, run_migrations
+from app.dependencies import TenantContext
 from app.main import app
-from app.models import Ticket, User, UserRole
+from app.models import Company, Membership, Ticket, User, UserRole
 from app.schemas import UserActiveUpdate, UserRoleUpdate
-from app.security import create_access_token, verify_password
+from app.security import create_access_token, hash_password, verify_password
 from app.users import update_user_active_status, update_user_role
 
 
@@ -69,13 +73,22 @@ def authenticated_client(client, session_factory):
 def create_role_client(client, session_factory, email, role):
     registration = client.post(
         "/api/v1/auth/register",
-        json={"email": email, "password": "secure-password"},
+        json={
+            "full_name": "Test User",
+            "email": email,
+            "password": "secure-password",
+        },
     )
     assert registration.status_code == 201
     with session_factory() as db:
         user = db.scalar(select(User).where(User.email == email))
         assert user is not None
         user.role = role
+        membership = db.scalar(
+            select(Membership).where(Membership.user_id == user.id)
+        )
+        assert membership is not None
+        membership.role = role
         db.commit()
         user_id = user.id
 
@@ -114,6 +127,7 @@ def test_register_user_returns_public_data_and_stores_password_hash(
     response = client.post(
         "/api/v1/auth/register",
         json={
+            "full_name": "New User",
             "email": "New.User@example.com",
             "password": password,
             "role": "admin",
@@ -121,22 +135,53 @@ def test_register_user_returns_public_data_and_stores_password_hash(
     )
 
     assert response.status_code == 201
-    assert response.json() == {"id": 1, "email": "new.user@example.com"}
+    assert response.json() == {
+        "id": 1,
+        "full_name": "New User",
+        "email": "new.user@example.com",
+    }
     with session_factory() as db:
         user = db.scalar(select(User).where(User.email == "new.user@example.com"))
         assert user is not None
+        assert user.full_name == "New User"
         assert user.role == UserRole.REQUESTER
         assert user.password_hash != password
         assert verify_password(password, user.password_hash)
 
 
+def test_register_requires_non_empty_full_name(client):
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "missing-name@example.com", "password": "secure-password"},
+    )
+    assert response.status_code == 422
+
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "full_name": "   ",
+            "email": "blank-name@example.com",
+            "password": "secure-password",
+        },
+    )
+    assert response.status_code == 422
+
+
 def test_register_duplicate_email_returns_409(client):
-    payload = {"email": "duplicate@example.com", "password": "secure-password"}
+    payload = {
+        "full_name": "Duplicate User",
+        "email": "duplicate@example.com",
+        "password": "secure-password",
+    }
     assert client.post("/api/v1/auth/register", json=payload).status_code == 201
 
     response = client.post(
         "/api/v1/auth/register",
-        json={"email": "DUPLICATE@example.com", "password": "another-password"},
+        json={
+            "full_name": "Duplicate User",
+            "email": "DUPLICATE@example.com",
+            "password": "another-password",
+        },
     )
 
     assert response.status_code == 409
@@ -146,7 +191,11 @@ def test_register_duplicate_email_returns_409(client):
 def test_login_returns_bearer_token(client):
     client.post(
         "/api/v1/auth/register",
-        json={"email": "login@example.com", "password": "secure-password"},
+        json={
+            "full_name": "Login User",
+            "email": "login@example.com",
+            "password": "secure-password",
+        },
     )
 
     response = client.post(
@@ -161,6 +210,358 @@ def test_login_returns_bearer_token(client):
         "test-secret-key-with-at-least-32-bytes",
         algorithms=["HS256"],
     )["sub"] == "1"
+    profile = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {response.json()['access_token']}"},
+    )
+    assert profile.status_code == 200
+    assert profile.json()["full_name"] == "Login User"
+
+
+def test_login_accepts_smartdeskai_local_email(client, session_factory):
+    with session_factory() as db:
+        user = User(
+            full_name="Técnico de Teste",
+            email="tecnico.teste@smartdeskai.local",
+            password_hash=hash_password("secure-password"),
+            role=UserRole.TECHNICIAN,
+            is_active=True,
+        )
+        db.add(user)
+        db.flush()
+        db.add(
+            Membership(
+                user_id=user.id,
+                company_id=1,
+                role=UserRole.TECHNICIAN,
+                is_active=True,
+            )
+        )
+        db.commit()
+        user_id = user.id
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "tecnico.teste@smartdeskai.local",
+            "password": "secure-password",
+            "company_id": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    profile = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": "Bearer " + response.json()["access_token"]},
+    )
+    assert profile.status_code == 200
+    assert profile.json() == {
+        "id": user_id,
+        "full_name": "Técnico de Teste",
+        "email": "tecnico.teste@smartdeskai.local",
+    }
+
+
+def test_login_rejects_other_reserved_local_domains(client):
+    response = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "user@other.local",
+            "password": "secure-password",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_authenticated_user_without_name_returns_null(
+    client, session_factory
+):
+    registration = client.post(
+        "/api/v1/auth/register",
+        json={
+            "full_name": "Legacy User",
+            "email": "legacy-name@example.com",
+            "password": "secure-password",
+        },
+    )
+    assert registration.status_code == 201
+    with session_factory() as db:
+        user = db.scalar(select(User).where(User.email == "legacy-name@example.com"))
+        assert user is not None
+        user.full_name = None
+        db.commit()
+
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "legacy-name@example.com", "password": "secure-password"},
+    )
+    assert login.status_code == 200
+    profile = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+    )
+    assert profile.status_code == 200
+    assert profile.json()["full_name"] is None
+
+
+def test_current_user_profile_requires_authentication(client):
+    response = client.get("/api/v1/auth/me")
+    assert response.status_code == 401
+
+
+def test_login_requires_explicit_selection_for_multiple_active_memberships(
+    client, session_factory
+):
+    registration = client.post(
+        "/api/v1/auth/register",
+        json={
+            "full_name": "Multi User",
+            "email": "multi@example.com",
+            "password": "secure-password",
+        },
+    )
+    assert registration.status_code == 201
+
+    with session_factory() as db:
+        second_company = Company(name="Second company")
+        db.add(second_company)
+        db.flush()
+        user = db.scalar(select(User).where(User.email == "multi@example.com"))
+        assert user is not None
+        db.add(
+            Membership(
+                user_id=user.id,
+                company_id=second_company.id,
+                role=UserRole.TECHNICIAN,
+                is_active=True,
+            )
+        )
+        second_company_id = second_company.id
+        db.commit()
+
+    ambiguous_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "multi@example.com", "password": "secure-password"},
+    )
+    assert ambiguous_login.status_code == 409
+    companies = ambiguous_login.json()["detail"]["companies"]
+    assert {company["id"] for company in companies} == {1, second_company_id}
+
+    unauthorized_selection = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "multi@example.com",
+            "password": "secure-password",
+            "company_id": 999,
+        },
+    )
+    assert unauthorized_selection.status_code == 403
+
+    selected_login = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "multi@example.com",
+            "password": "secure-password",
+            "company_id": second_company_id,
+        },
+    )
+    assert selected_login.status_code == 200
+    token = selected_login.json()["access_token"]
+    assert client.get(
+        "/api/v1/tickets",
+        headers={"Authorization": f"Bearer {token}"},
+    ).status_code == 200
+
+
+def test_tenant_scope_prevents_cross_company_ticket_and_user_access(
+    authenticated_client, admin_client, technician_client, client, session_factory
+):
+    with session_factory() as db:
+        company_b = Company(name="Company B")
+        db.add(company_b)
+        db.flush()
+        requester_b = User(
+            email="requester-b@example.com",
+            password_hash=hash_password("secure-password"),
+            role=UserRole.REQUESTER,
+        )
+        technician_b = User(
+            email="technician-b@example.com",
+            password_hash=hash_password("secure-password"),
+            role=UserRole.TECHNICIAN,
+        )
+        admin_b = User(
+            email="admin-b@example.com",
+            password_hash=hash_password("secure-password"),
+            role=UserRole.ADMIN,
+        )
+        db.add_all([requester_b, technician_b, admin_b])
+        db.flush()
+        db.add_all(
+            [
+                Membership(
+                    user_id=requester_b.id,
+                    company_id=company_b.id,
+                    role=UserRole.REQUESTER,
+                    is_active=True,
+                ),
+                Membership(
+                    user_id=technician_b.id,
+                    company_id=company_b.id,
+                    role=UserRole.TECHNICIAN,
+                    is_active=True,
+                ),
+                Membership(
+                    user_id=admin_b.id,
+                    company_id=company_b.id,
+                    role=UserRole.ADMIN,
+                    is_active=True,
+                ),
+            ]
+        )
+        company_b_id = company_b.id
+        requester_b_id = requester_b.id
+        technician_b_id = technician_b.id
+        db.commit()
+
+    requester_b_login = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "requester-b@example.com",
+            "password": "secure-password",
+            "company_id": company_b_id,
+        },
+    )
+    admin_b_login = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "admin-b@example.com",
+            "password": "secure-password",
+            "company_id": company_b_id,
+        },
+    )
+    assert requester_b_login.status_code == admin_b_login.status_code == 200
+    requester_b_token = requester_b_login.json()["access_token"]
+    admin_b_token = admin_b_login.json()["access_token"]
+
+    ticket_a = authenticated_client.post(
+        "/api/v1/tickets",
+        json={
+            "title": "Ticket for company A",
+            "description": "A sufficiently long description.",
+            "category": "software",
+        },
+    ).json()
+    ticket_b_response = client.post(
+        "/api/v1/tickets",
+        headers={"Authorization": f"Bearer {requester_b_token}"},
+        json={
+            "title": "Ticket for company B",
+            "description": "Another sufficiently long description.",
+            "category": "software",
+        },
+    )
+    assert ticket_b_response.status_code == 201
+    ticket_b = ticket_b_response.json()
+    with session_factory() as db:
+        persisted_ticket_a = db.get(Ticket, ticket_a["id"])
+        persisted_ticket_b = db.get(Ticket, ticket_b["id"])
+        assert persisted_ticket_a is not None
+        assert persisted_ticket_b is not None
+        assert persisted_ticket_a.tenant_id == 1
+        assert persisted_ticket_b.tenant_id == company_b_id
+
+    requester_a_token = authenticated_client.headers["Authorization"]
+    assert client.get(
+        "/api/v1/tickets",
+        headers={"Authorization": requester_a_token},
+    ).json() == [ticket_a]
+    assert client.get(
+        f"/api/v1/tickets/{ticket_b['id']}",
+        headers={"Authorization": requester_a_token},
+    ).status_code == 404
+
+    technician_a_token = technician_client.headers["Authorization"]
+    tech_a_list = client.get(
+        "/api/v1/tickets",
+        headers={"Authorization": technician_a_token},
+    )
+    assert tech_a_list.status_code == 200
+    visible_to_technician_a = {
+        ticket["id"] for ticket in tech_a_list.json()
+    }
+    assert ticket_a["id"] in visible_to_technician_a
+    assert ticket_b["id"] not in visible_to_technician_a
+    assert client.post(
+        f"/api/v1/tickets/{ticket_b['id']}/claim",
+        headers={"Authorization": technician_a_token},
+    ).status_code == 404
+
+    assert ticket_b["id"] not in {
+        ticket["id"] for ticket in admin_client.get("/api/v1/tickets").json()
+    }
+    available_a = admin_client.get("/api/v1/tickets/available")
+    available_b = client.get(
+        "/api/v1/tickets/available",
+        headers={"Authorization": f"Bearer {admin_b_token}"},
+    )
+    assert available_a.status_code == available_b.status_code == 200
+    assert ticket_b["id"] not in {
+        ticket["id"] for ticket in available_a.json()
+    }
+    assert ticket_b["id"] in {
+        ticket["id"] for ticket in available_b.json()
+    }
+    users_a = admin_client.get("/api/v1/users")
+    assert users_a.status_code == 200
+    assert requester_b_id not in {user["id"] for user in users_a.json()}
+    assert admin_client.patch(
+        f"/api/v1/users/{requester_b_id}/role",
+        json={"role": "technician"},
+    ).status_code == 404
+    assert admin_client.patch(
+        f"/api/v1/tickets/{ticket_b['id']}/assignee",
+        json={"technician_id": requester_b_id},
+    ).status_code == 404
+    assert admin_client.patch(
+        f"/api/v1/tickets/{ticket_a['id']}/assignee",
+        json={"technician_id": technician_b_id},
+    ).status_code == 422
+
+    assert client.get(
+        f"/api/v1/tickets/{ticket_a['id']}",
+        headers={"Authorization": f"Bearer {admin_b_token}"},
+    ).status_code == 404
+
+
+def test_deactivated_membership_revokes_existing_token(
+    authenticated_client, session_factory
+):
+    token = authenticated_client.headers["Authorization"]
+    with session_factory() as db:
+        user = db.scalar(select(User).where(User.email == "tester@example.com"))
+        assert user is not None
+        membership = db.scalar(
+            select(Membership).where(
+                Membership.user_id == user.id,
+                Membership.company_id == 1,
+            )
+        )
+        assert membership is not None
+        membership.is_active = False
+        db.commit()
+
+    response = authenticated_client.get(
+        "/api/v1/tickets",
+        headers={"Authorization": token},
+    )
+    assert response.status_code == 403
+    profile = authenticated_client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": token},
+    )
+    assert profile.status_code == 403
 
 
 @pytest.mark.parametrize(
@@ -173,7 +574,11 @@ def test_login_returns_bearer_token(client):
 def test_login_invalid_credentials_returns_401(client, email, password):
     client.post(
         "/api/v1/auth/register",
-        json={"email": "known@example.com", "password": "secure-password"},
+        json={
+            "full_name": "Known User",
+            "email": "known@example.com",
+            "password": "secure-password",
+        },
     )
 
     response = client.post(
@@ -296,7 +701,9 @@ def test_list_tickets(authenticated_client):
     assert len(response.json()) == 1
 
 
-def test_update_ticket_status(admin_client):
+def test_admin_cannot_start_ticket_without_active_assignee(
+    admin_client, session_factory
+):
     payload = {
         "title": "Solicitação de acesso",
         "description": "Usuário precisa de acesso ao sistema interno.",
@@ -308,8 +715,135 @@ def test_update_ticket_status(admin_client):
         f"/api/v1/tickets/{created['id']}/status",
         json={"status": "em_atendimento"},
     )
+    assert response.status_code == 409
+    with session_factory() as db:
+        ticket = db.get(Ticket, created["id"])
+        assert ticket is not None
+        assert ticket.status == "aberto"
+        assert ticket.assigned_technician_id is None
+
+
+def test_update_ticket_status_after_admin_assigns_active_technician(
+    admin_client, authenticated_client, technician_client, session_factory
+):
+    created = authenticated_client.post(
+        "/api/v1/tickets",
+        json={
+            "title": "Solicitação de acesso",
+            "description": "Usuário precisa de acesso ao sistema interno.",
+            "category": "acesso",
+        },
+    ).json()
+    with session_factory() as db:
+        technician = db.scalar(
+            select(User).where(User.email == "tech@example.com")
+        )
+        assert technician is not None
+        technician_id = technician.id
+
+    assigned = admin_client.patch(
+        f"/api/v1/tickets/{created['id']}/assignee",
+        json={"technician_id": technician_id},
+    )
+    assert assigned.status_code == 200
+    response = admin_client.patch(
+        f"/api/v1/tickets/{created['id']}/status",
+        json={"status": "em_atendimento"},
+    )
     assert response.status_code == 200
     assert response.json()["status"] == "em_atendimento"
+    assert response.json()["assigned_technician_id"] == technician_id
+
+
+@pytest.mark.parametrize("inactive_record", ["user", "membership"])
+def test_admin_cannot_start_ticket_with_inactive_assignee(
+    admin_client,
+    authenticated_client,
+    technician_client,
+    session_factory,
+    inactive_record,
+):
+    created = authenticated_client.post(
+        "/api/v1/tickets",
+        json={
+            "title": "Chamado com técnico inativo",
+            "description": "Descrição suficientemente longa.",
+            "category": "software",
+        },
+    ).json()
+    with session_factory() as db:
+        technician = db.scalar(
+            select(User).where(User.email == "tech@example.com")
+        )
+        assert technician is not None
+        technician_id = technician.id
+        membership = db.scalar(
+            select(Membership).where(Membership.user_id == technician_id)
+        )
+        assert membership is not None
+        ticket = db.get(Ticket, created["id"])
+        assert ticket is not None
+        ticket.assigned_technician_id = technician_id
+        if inactive_record == "user":
+            technician.is_active = False
+        else:
+            membership.is_active = False
+        db.commit()
+
+    response = admin_client.patch(
+        f"/api/v1/tickets/{created['id']}/status",
+        json={"status": "em_atendimento"},
+    )
+    assert response.status_code == 409
+    with session_factory() as db:
+        ticket = db.get(Ticket, created["id"])
+        assert ticket is not None
+        assert ticket.status == "aberto"
+        assert ticket.assigned_technician_id == technician_id
+
+
+@pytest.mark.parametrize("inactive_record", ["user", "membership"])
+def test_admin_cannot_assign_inactive_technician(
+    admin_client,
+    authenticated_client,
+    technician_client,
+    session_factory,
+    inactive_record,
+):
+    created = authenticated_client.post(
+        "/api/v1/tickets",
+        json={
+            "title": "Chamado sem técnico",
+            "description": "Descrição suficientemente longa.",
+            "category": "software",
+        },
+    ).json()
+    with session_factory() as db:
+        technician = db.scalar(
+            select(User).where(User.email == "tech@example.com")
+        )
+        assert technician is not None
+        technician_id = technician.id
+        membership = db.scalar(
+            select(Membership).where(Membership.user_id == technician_id)
+        )
+        assert membership is not None
+        if inactive_record == "user":
+            technician.is_active = False
+        else:
+            membership.is_active = False
+        db.commit()
+
+    response = admin_client.patch(
+        f"/api/v1/tickets/{created['id']}/assignee",
+        json={"technician_id": technician_id},
+    )
+    assert response.status_code == 422
+    with session_factory() as db:
+        ticket = db.get(Ticket, created["id"])
+        assert ticket is not None
+        assert ticket.status == "aberto"
+        assert ticket.assigned_technician_id is None
 
 
 def test_missing_ticket_returns_404(authenticated_client):
@@ -409,6 +943,12 @@ def test_technician_can_claim_and_update_available_ticket(
     available = technician_client.get("/api/v1/tickets/available")
     assert available.status_code == 200
     assert [ticket["id"] for ticket in available.json()] == [created["id"]]
+    assert [ticket["id"] for ticket in technician_client.get(
+        "/api/v1/tickets"
+    ).json()] == [created["id"]]
+    assert technician_client.get(
+        f"/api/v1/tickets/{created['id']}"
+    ).status_code == 200
 
     claimed = technician_client.post(f"/api/v1/tickets/{created['id']}/claim")
     assert claimed.status_code == 200
@@ -530,6 +1070,27 @@ def test_admin_can_assign_and_unassign_ticket(
         f"/api/v1/tickets/{created['id']}"
     ).status_code == 200
 
+    started = admin_client.patch(
+        f"/api/v1/tickets/{created['id']}/status",
+        json={"status": "em_atendimento"},
+    )
+    assert started.status_code == 200
+    assert started.json()["assigned_technician_id"] == technician_id
+
+    unassigned = admin_client.patch(
+        f"/api/v1/tickets/{created['id']}/assignee",
+        json={"technician_id": None},
+    )
+    assert unassigned.status_code == 409
+    unchanged = admin_client.get(f"/api/v1/tickets/{created['id']}").json()
+    assert unchanged["status"] == "em_atendimento"
+    assert unchanged["assigned_technician_id"] == technician_id
+
+    returned_to_open = admin_client.patch(
+        f"/api/v1/tickets/{created['id']}/status",
+        json={"status": "aberto"},
+    )
+    assert returned_to_open.status_code == 200
     unassigned = admin_client.patch(
         f"/api/v1/tickets/{created['id']}/assignee",
         json={"technician_id": None},
@@ -555,6 +1116,7 @@ def test_administrator_can_view_legacy_and_manage_users(
             description="Registro histórico sem proprietário.",
             category="outro",
             requester_id=None,
+            tenant_id=1,
         )
         db.add(legacy)
         db.commit()
@@ -576,7 +1138,11 @@ def test_admin_can_change_role_and_deactivate_user(
 ):
     registration = client.post(
         "/api/v1/auth/register",
-        json={"email": "managed@example.com", "password": "secure-password"},
+        json={
+            "full_name": "Managed User",
+            "email": "managed@example.com",
+            "password": "secure-password",
+        },
     )
     user_id = registration.json()["id"]
 
@@ -613,7 +1179,7 @@ def test_non_admin_cannot_manage_users(authenticated_client):
     assert response.status_code == 403
 
 
-def test_inactive_user_existing_token_is_rejected(
+def test_inactive_membership_existing_token_is_rejected(
     admin_client, client, session_factory
 ):
     _, user_id, token = create_role_client(
@@ -626,7 +1192,7 @@ def test_inactive_user_existing_token_is_rejected(
 
     response = client.get("/api/v1/tickets", headers={"Authorization": token})
 
-    assert response.status_code == 401
+    assert response.status_code == 403
 
 
 def test_last_active_admin_cannot_be_demoted_or_deactivated(
@@ -660,21 +1226,50 @@ def test_concurrent_admin_changes_cannot_remove_all_active_admins(tmp_path):
     try:
         Base.metadata.create_all(bind=engine)
         with session_factory() as db:
+            company = Company(name="Concurrency tenant")
+            db.add(company)
+            db.flush()
+            first = User(
+                email="first-admin@example.com",
+                password_hash="unused",
+                role=UserRole.ADMIN,
+            )
+            second = User(
+                email="second-admin@example.com",
+                password_hash="unused",
+                role=UserRole.ADMIN,
+            )
+            db.add_all([first, second])
+            db.flush()
             db.add_all(
                 [
-                    User(
-                        email="first-admin@example.com",
-                        password_hash="unused",
+                    Membership(
+                        user_id=first.id,
+                        company_id=company.id,
                         role=UserRole.ADMIN,
                     ),
-                    User(
-                        email="second-admin@example.com",
-                        password_hash="unused",
+                    Membership(
+                        user_id=second.id,
+                        company_id=company.id,
                         role=UserRole.ADMIN,
                     ),
                 ]
             )
             db.commit()
+            first_admin_id = first.id
+            second_admin_id = second.id
+            tenant_id = company.id
+
+        first_context = TenantContext(
+            user_id=first_admin_id,
+            tenant_id=tenant_id,
+            role=UserRole.ADMIN,
+        )
+        second_context = TenantContext(
+            user_id=second_admin_id,
+            tenant_id=tenant_id,
+            role=UserRole.ADMIN,
+        )
 
         start = Barrier(2)
 
@@ -683,9 +1278,10 @@ def test_concurrent_admin_changes_cannot_remove_all_active_admins(tmp_path):
                 start.wait()
                 try:
                     update_user_role(
-                        1,
+                        first_admin_id,
                         UserRoleUpdate(role=UserRole.REQUESTER),
                         db,
+                        first_context,
                     )
                 except HTTPException as error:
                     return error.status_code
@@ -696,9 +1292,10 @@ def test_concurrent_admin_changes_cannot_remove_all_active_admins(tmp_path):
                 start.wait()
                 try:
                     update_user_active_status(
-                        2,
+                        second_admin_id,
                         UserActiveUpdate(is_active=False),
                         db,
+                        second_context,
                     )
                 except HTTPException as error:
                     return error.status_code
@@ -714,9 +1311,10 @@ def test_concurrent_admin_changes_cannot_remove_all_active_admins(tmp_path):
         assert sorted(results) == [200, 409]
         with session_factory() as db:
             active_admins = db.scalars(
-                select(User.id).where(
-                    User.role == UserRole.ADMIN,
-                    User.is_active.is_(True),
+                select(Membership.id).where(
+                    Membership.company_id == tenant_id,
+                    Membership.role == UserRole.ADMIN,
+                    Membership.is_active.is_(True),
                 )
             ).all()
             assert len(active_admins) == 1
@@ -730,6 +1328,7 @@ def test_requester_cannot_access_legacy_ticket(authenticated_client, session_fac
             title="Chamado legado",
             description="Registro histórico sem proprietário.",
             category="outro",
+            tenant_id=1,
         )
         db.add(legacy)
         db.commit()
@@ -747,6 +1346,7 @@ def test_admin_only_can_see_legacy_ticket_available_queue(
                 title="Chamado legado",
                 description="Registro histórico sem proprietário.",
                 category="outro",
+                tenant_id=1,
             )
         )
         db.commit()
@@ -792,17 +1392,77 @@ def test_legacy_migration_preserves_tickets_without_owner(tmp_path):
 
         with legacy_engine.connect() as connection:
             rows = connection.exec_driver_sql(
-                "SELECT id, title, requester_id, assigned_technician_id FROM tickets ORDER BY id"
+                """
+                SELECT id, title, requester_id, assigned_technician_id, tenant_id
+                FROM tickets ORDER BY id
+                """
             ).all()
-            assert rows == [
+            assert [tuple(row[:4]) for row in rows] == [
                 (1, "Legado 1", None, None),
                 (2, "Legado 2", None, None),
             ]
+            assert rows[0][4] is not None
+            assert rows[1][4] == rows[0][4]
+            assert connection.exec_driver_sql(
+                "SELECT name FROM companies WHERE id = ?", (rows[0][4],)
+            ).scalar_one() == "Empresa legada"
             assert connection.exec_driver_sql(
                 "SELECT COUNT(*) FROM users"
             ).scalar_one() == 0
     finally:
         legacy_engine.dispose()
+
+
+def test_full_name_migration_preserves_existing_user_data(tmp_path):
+    database_path = tmp_path / "existing-user-full-name.db"
+    migration_engine = create_engine(f"sqlite:///{database_path}")
+    config_path = Path(__file__).resolve().parents[1] / "alembic.ini"
+    migration_config = Config(str(config_path))
+    migration_config.set_main_option(
+        "script_location",
+        str(config_path.parent / "migrations"),
+    )
+    try:
+        with migration_engine.begin() as connection:
+            migration_config.attributes["connection"] = connection
+            command.upgrade(migration_config, "20261030_0002")
+
+        with migration_engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                INSERT INTO users (id, email, password_hash, role, is_active)
+                VALUES
+                    (1, 'Andubryanrj@hotmail.com', 'target-hash', 'requester', 1),
+                    (18, 'existing@example.com', 'existing-hash', 'admin', 1),
+                    (19, 'other@example.com', 'other-hash', 'technician', 1)
+                """
+            )
+
+        with migration_engine.begin() as connection:
+            migration_config.attributes["connection"] = connection
+            command.upgrade(migration_config, "head")
+
+        with migration_engine.connect() as connection:
+            user = connection.exec_driver_sql(
+                """
+                SELECT id, email, password_hash, role, is_active, full_name
+                FROM users ORDER BY id
+                """
+            ).all()
+            assert [tuple(row) for row in user] == [
+                (
+                    1,
+                    "Andubryanrj@hotmail.com",
+                    "target-hash",
+                    "requester",
+                    1,
+                    "Uanderson Martins",
+                ),
+                (18, "existing@example.com", "existing-hash", "admin", 1, None),
+                (19, "other@example.com", "other-hash", "technician", 1, None),
+            ]
+    finally:
+        migration_engine.dispose()
 
 
 def test_migration_adds_role_fields_to_existing_users_table(tmp_path):
@@ -839,5 +1499,56 @@ def test_migration_adds_role_fields_to_existing_users_table(tmp_path):
                 "requester",
                 1,
             )
+            membership = connection.exec_driver_sql(
+                """
+                SELECT user_id, company_id, role, is_active
+                FROM memberships WHERE user_id = 1
+                """
+            ).one()
+            assert tuple(membership) == (1, 1, "requester", 1)
+    finally:
+        legacy_engine.dispose()
+
+
+def test_migration_copies_existing_roles_and_active_status_to_memberships(tmp_path):
+    database_path = tmp_path / "existing-memberships.db"
+    legacy_engine = create_engine(f"sqlite:///{database_path}")
+    try:
+        with legacy_engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY,
+                    email VARCHAR(320) NOT NULL UNIQUE,
+                    password_hash VARCHAR(255) NOT NULL,
+                    role VARCHAR(20) NOT NULL,
+                    is_active BOOLEAN NOT NULL
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO users (id, email, password_hash, role, is_active)
+                VALUES
+                    (1, 'admin@example.com', 'admin-hash', 'admin', 1),
+                    (2, 'tech@example.com', 'tech-hash', 'technician', 1),
+                    (3, 'inactive@example.com', 'requester-hash', 'requester', 0)
+                """
+            )
+
+        run_migrations(legacy_engine)
+
+        with legacy_engine.connect() as connection:
+            memberships = connection.exec_driver_sql(
+                """
+                SELECT user_id, company_id, role, is_active
+                FROM memberships ORDER BY user_id
+                """
+            ).all()
+            assert [tuple(row) for row in memberships] == [
+                (1, 1, "admin", 1),
+                (2, 1, "technician", 1),
+                (3, 1, "requester", 0),
+            ]
     finally:
         legacy_engine.dispose()

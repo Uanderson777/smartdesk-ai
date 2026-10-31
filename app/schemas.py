@@ -1,9 +1,38 @@
 from datetime import datetime
 from enum import Enum
+import re
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 
 from app.models import UserRole
+
+
+def validate_email_address(value: str) -> str:
+    normalized = value.strip()
+    local_part, separator, domain = normalized.rpartition("@")
+    if separator and domain.lower() == "smartdeskai.local":
+        valid_local_part = re.fullmatch(
+            r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*",
+            local_part,
+        )
+        if valid_local_part is None:
+            raise ValueError("Invalid email address.")
+        return normalized
+
+    try:
+        return str(TypeAdapter(EmailStr).validate_python(normalized))
+    except ValidationError:
+        raise ValueError("Invalid email address.") from None
 
 
 class TicketCategory(str, Enum):
@@ -60,18 +89,39 @@ class TicketRead(BaseModel):
 
 
 class UserCreate(BaseModel):
+    full_name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=160),
+    ]
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
 
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=128)
+    company_id: int | None = Field(default=None, gt=0)
+
+    @field_validator("email")
+    @classmethod
+    def validate_login_email(cls, value: str) -> str:
+        return validate_email_address(value)
+
+
+class TenantOption(BaseModel):
+    id: int
+    name: str
 
 
 class UserRead(BaseModel):
     id: int
-    email: EmailStr
+    full_name: str | None
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_user_email(cls, value: str) -> str:
+        return validate_email_address(value)
 
 
 class AdminUserRead(UserRead):
