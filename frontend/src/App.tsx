@@ -26,7 +26,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { ApiError, api } from "./api";
+import { API_BASE, ApiError, api } from "./api";
 import type {
   Ticket,
   TicketCategory,
@@ -80,6 +80,8 @@ const roleLabels: Record<UserRole, string> = {
   technician: "Técnico",
   requester: "Solicitante",
 };
+const API_DOCS_URL =
+  API_BASE || (import.meta.env.DEV ? "http://127.0.0.1:8000" : window.location.origin);
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("pt-BR", {
@@ -354,7 +356,7 @@ function App() {
             </button>
           ))}
           <span className="nav-caption nav-caption-spaced">SUPORTE</span>
-          <a className="nav-item nav-link" href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">
+          <a className="nav-item nav-link" href={`${API_DOCS_URL}/docs`} target="_blank" rel="noreferrer">
             <CircleHelp size={18} strokeWidth={1.9} />
             <span>Documentação da API</span>
           </a>

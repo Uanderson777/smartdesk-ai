@@ -144,6 +144,43 @@ do escopo permitido ao usuário. Administradores veem a visão geral e gerenciam
 atribuições; técnicos acessam a fila disponível e seus chamados; solicitantes
 acompanham os próprios chamados e podem abrir novos.
 
+## Publicação online
+
+O repositório inclui `netlify.toml` para publicar o frontend com base `frontend`,
+comando `npm run build`, diretório `dist` e fallback SPA para `index.html`.
+Configure no Netlify a variável de build `VITE_API_BASE_URL` com a origem HTTPS
+da API (por exemplo, `https://sua-api.example.com`, sem `/api/v1`). O frontend
+usa esse endereço para chamadas à API e para abrir sua documentação.
+
+A API inclui um `Dockerfile` para hospedagem em um serviço que execute
+containers, como Render. Use um PostgreSQL gerenciado e persistente; SQLite é
+adequado para desenvolvimento e testes, não para o disco efêmero de um
+container de produção. O backend aceita URLs PostgreSQL `postgres://` e
+`postgresql://` e as adapta para o driver psycopg incluído nos requisitos.
+
+Configure estas variáveis no serviço da API:
+
+| Variável | Valor |
+|---|---|
+| `DATABASE_URL` | URL privada de conexão fornecida pelo PostgreSQL gerenciado. |
+| `JWT_SECRET_KEY` | Segredo aleatório com pelo menos 32 bytes. Gere e armazene no cofre de segredos do host; nunca use o exemplo de desenvolvimento nem o versionamento. |
+| `CORS_ORIGINS` | Origens exatas do frontend, separadas por vírgula e sem caminhos, como `https://seu-site.netlify.app`. |
+| `PORT` | Normalmente fornecida automaticamente pelo host do container. |
+
+As migrations são aplicadas quando a API inicia. Depois que o banco existir,
+crie o administrador inicial executando `python -m app.bootstrap_admin
+admin@example.com` em um terminal/one-off job seguro do serviço com acesso às
+mesmas variáveis. Não habilite o cadastro público de administradores: o
+cadastro web cria somente solicitantes.
+
+Ordem recomendada: crie PostgreSQL e API, configure `JWT_SECRET_KEY` e
+`DATABASE_URL`, publique o frontend, então defina `CORS_ORIGINS` com o domínio
+real emitido pelo Netlify e `VITE_API_BASE_URL` com a URL real da API. Refaça o
+deploy do frontend após mudar a variável `VITE_API_BASE_URL`; variáveis `VITE_`
+são incorporadas durante o build. Valide `https://sua-api.example.com/health`,
+cadastro, login e chamados nos domínios implantados. Não publique segredos em
+issues, logs ou no repositório.
+
 O token JWT é mantido somente na memória da aplicação e enviado como
 `Authorization: Bearer`. Ele não é gravado em `localStorage` ou
 `sessionStorage`; portanto, atualizar ou fechar a página encerra a sessão e
@@ -249,7 +286,12 @@ migrations de bancos legados, sem alterar o banco local de desenvolvimento.
 
 O SmartDesk AI está em evolução contínua. A implementação atual inclui
 autenticação JWT, perfis de acesso, gestão de usuários, migrations e fluxo de
-atendimento de chamados.
+atendimento de chamados. Não há cobrança, assinaturas, preços, planos, limites
+de uso ou recursos pagos implementados. A base multiempresa (`companies` e
+`memberships`) pode apoiar futuramente planos por empresa; antes disso, será
+necessário definir regras de plano e limites no backend e escolher/configurar
+um provedor de pagamentos. Nenhum preço ou recurso futuro é oferecido como
+disponível.
 
 ## Autor
 

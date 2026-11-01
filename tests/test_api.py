@@ -14,13 +14,35 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import main as main_module
-from app.database import Base, get_db, run_migrations
+from app.database import Base, get_db, normalize_database_url, run_migrations
 from app.dependencies import TenantContext
 from app.main import app
 from app.models import Company, Membership, Ticket, User, UserRole
 from app.schemas import UserActiveUpdate, UserRoleUpdate
 from app.security import create_access_token, hash_password, verify_password
 from app.users import update_user_active_status, update_user_role
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "postgres://user:password@db.example:5432/smartdesk",
+            "postgresql+psycopg://user:password@db.example:5432/smartdesk",
+        ),
+        (
+            "postgresql://user:password@db.example:5432/smartdesk",
+            "postgresql+psycopg://user:password@db.example:5432/smartdesk",
+        ),
+        (
+            "postgresql+psycopg://user:password@db.example:5432/smartdesk",
+            "postgresql+psycopg://user:password@db.example:5432/smartdesk",
+        ),
+        ("sqlite:///./smartdesk.db", "sqlite:///./smartdesk.db"),
+    ],
+)
+def test_normalize_database_url(url, expected):
+    assert normalize_database_url(url) == expected
 
 
 @pytest.fixture()
@@ -68,6 +90,20 @@ def authenticated_client(client, session_factory):
     )
     client.headers["Authorization"] = token
     return client
+
+
+def test_cors_preflight_allows_local_frontend(client):
+    response = client.options(
+        "/api/v1/auth/login",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
 
 
 def create_role_client(client, session_factory, email, role):
