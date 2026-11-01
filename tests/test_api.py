@@ -14,7 +14,13 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import main as main_module
-from app.database import Base, get_db, normalize_database_url, run_migrations
+from app.database import (
+    Base,
+    database_url_from_environment,
+    get_db,
+    normalize_database_url,
+    run_migrations,
+)
 from app.dependencies import TenantContext
 from app.main import app
 from app.models import Company, Membership, Ticket, User, UserRole
@@ -43,6 +49,31 @@ from app.users import update_user_active_status, update_user_role
 )
 def test_normalize_database_url(url, expected):
     assert normalize_database_url(url) == expected
+
+
+def test_database_url_defaults_to_sqlite_outside_render():
+    assert database_url_from_environment({}) == "sqlite:///./smartdesk.db"
+
+
+def test_render_requires_database_url():
+    with pytest.raises(RuntimeError, match="DATABASE_URL must be configured"):
+        database_url_from_environment({"RENDER": "true"})
+
+
+def test_render_rejects_non_postgresql_database():
+    with pytest.raises(RuntimeError, match="require DATABASE_URL.*PostgreSQL"):
+        database_url_from_environment(
+            {"RENDER": "true", "DATABASE_URL": "sqlite:///./smartdesk.db"}
+        )
+
+
+def test_render_normalizes_postgresql_database_url():
+    assert database_url_from_environment(
+        {
+            "RENDER": "true",
+            "DATABASE_URL": "postgresql://user:password@db.example:5432/smartdesk",
+        }
+    ) == "postgresql+psycopg://user:password@db.example:5432/smartdesk"
 
 
 @pytest.fixture()

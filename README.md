@@ -167,6 +167,12 @@ Configure estas variáveis no serviço da API:
 | `CORS_ORIGINS` | Origens exatas do frontend, separadas por vírgula e sem caminhos, como `https://seu-site.netlify.app`. |
 | `PORT` | Normalmente fornecida automaticamente pelo host do container. |
 
+No Render, confirme que `DATABASE_URL` é a URL PostgreSQL interna do banco
+criado na mesma região (não a URL pública/externa) e que
+`JWT_SECRET_KEY` está definida. A aplicação falha explicitamente no startup se
+essas configurações forem inválidas ou se o Render tentar usar SQLite.
+`PORT` é injetada pelo Render; não é necessário fixar uma porta no painel.
+
 As migrations são aplicadas quando a API inicia. Depois que o banco existir,
 crie o administrador inicial executando `python -m app.bootstrap_admin
 admin@example.com` em um terminal/one-off job seguro do serviço com acesso às
