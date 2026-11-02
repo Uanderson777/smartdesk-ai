@@ -6,13 +6,14 @@ import type {
   TicketPriority,
   TicketStatus,
   TicketTriageResponse,
+  TenantOption,
   User,
   UserRole,
 } from "./types";
 
 export const API_BASE = (
   import.meta.env.VITE_API_BASE_URL?.trim() ||
-  "https://smartdesk-ai-e8cr.onrender.com"
+  (import.meta.env.DEV ? "" : "https://smartdesk-ai-e8cr.onrender.com")
 ).replace(/\/+$/, "");
 const API_REQUEST_TIMEOUT_MS = 60_000;
 
@@ -27,6 +28,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly detail?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
@@ -61,14 +63,17 @@ apiClient.interceptors.response.use(
     const detail = response.data?.detail as
       | string
       | Array<{ msg?: string }>
+      | { message?: string; companies?: TenantOption[] }
       | undefined;
     if (typeof detail === "string") {
       message = detail;
     } else if (Array.isArray(detail)) {
       message = detail.map((item) => item.msg ?? "Dados inválidos.").join(" ");
+    } else if (detail && typeof detail.message === "string") {
+      message = detail.message;
     }
 
-    return Promise.reject(new ApiError(message, response.status));
+    return Promise.reject(new ApiError(message, response.status, detail));
   },
 );
 
@@ -90,10 +95,14 @@ async function request<T>(
 }
 
 export const api = {
-  login: (email: string, password: string) =>
+  login: (email: string, password: string, companyId?: number) =>
     request<AccessToken>("/api/v1/auth/login", undefined, {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({
+        email,
+        password,
+        ...(companyId === undefined ? {} : { company_id: companyId }),
+      }),
     }),
 
   currentUser: (token: string) =>

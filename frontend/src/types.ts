@@ -44,6 +44,11 @@ export interface AccessToken {
   token_type: string;
 }
 
+export interface TenantOption {
+  id: number;
+  name: string;
+}
+
 export interface TicketFilters {
   period: "7" | "30" | "90" | "all";
   status: "all" | TicketStatus;

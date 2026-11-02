@@ -1,323 +1,295 @@
 # SmartDesk AI
 
-Sistema inteligente de Service Desk desenvolvido com Python e FastAPI.
+Aplicação de Service Desk com API REST e painel web para autenticação,
+gerenciamento de usuários e atendimento de chamados.
 
-O SmartDesk AI oferece uma API REST para autenticação, gestão de usuários e
-atendimento de chamados com controle de acesso baseado em perfis. O projeto
-está em evolução contínua; esta documentação descreve somente o que está
-implementado atualmente.
+- **Implantação informada:** https://smartdesk-ai-1swde3w2f-uanderson777s-projects.vercel.app
+  (status Production/Preview não confirmado; veja [Publicação](#publicação-vercel-render-e-postgresql))
+- **Repositório:** https://github.com/Uanderson777/smartdesk-ai
+- **API:** https://smartdesk-ai-e8cr.onrender.com
+- **Verificação da API:** https://smartdesk-ai-e8cr.onrender.com/health
+
+## Funcionalidades implementadas
+
+- Cadastro público de solicitantes e login com token JWT.
+- Seleção de empresa no login quando a conta tem mais de uma associação ativa.
+- Perfis por empresa: administrador, técnico e solicitante.
+- Isolamento de chamados e usuários pelo tenant ativo.
+- Criação, consulta, listagem paginada, atribuição, fila e atualização de status
+  dos chamados.
+- Painel com filtros, indicadores, busca e telas diferentes conforme o perfil.
+- Administração de perfis e ativações de usuários, sem exclusão definitiva.
+- Triagem opcional de chamados pela Gemini API: sugestão de categoria,
+  prioridade, justificativa e rascunho de resposta para revisão. A sugestão não
+  atualiza o chamado nem envia a resposta.
+- Documentação interativa da API em `/docs`.
+
+Não há envio de respostas ao solicitante, trilha de eventos dos chamados,
+refresh token, cobrança ou pagamentos implementados.
 
 ## Tecnologias
 
-- Python 3.13
-- FastAPI
-- React
-- TypeScript
-- Vite
-- SQLAlchemy
-- Alembic
-- Pydantic
-- SQLite
-- PyJWT
-- pwdlib com Argon2id
-- Pytest
-- Gemini API (opcional, para triagem inteligente)
+- Python 3.13, FastAPI, Pydantic e SQLAlchemy
+- Alembic para migrations
+- PostgreSQL em produção; SQLite para desenvolvimento e testes
+- JWT (HS256) e hashes de senha Argon2id (`pwdlib`)
+- React 18, TypeScript, Vite e Axios
+- Pytest e GitHub Actions
+- Gemini API opcional, chamada somente pelo backend
 
-## Requisitos
+## Estrutura
 
-- Python 3.13
-- Git
-
-## Instalação e configuração
-
-Clone o repositório e entre na pasta do projeto:
-
-```bash
-git clone https://github.com/Uanderson777/smartdesk-ai.git
-cd smartdesk-ai
+```text
+app/                 API, autenticação, autorização, banco e integração Gemini
+migrations/          Histórico de migrations Alembic
+tests/               Testes de API, migrations e integração de IA
+frontend/src/        Aplicação React e cliente HTTP
+Dockerfile           Imagem do backend para o Render
 ```
 
-Crie e ative um ambiente virtual.
+## Desenvolvimento local no Windows
 
-Windows (PowerShell):
+### Requisitos
+
+- Windows com PowerShell
+- Python 3.13
+- Node.js e npm compatíveis com Vite 6
+- Git
+
+Clone o repositório:
+
+```powershell
+git clone https://github.com/Uanderson777/smartdesk-ai.git
+Set-Location smartdesk-ai
+```
+
+Crie o ambiente Python e instale as dependências:
 
 ```powershell
 py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-Linux/macOS:
-
-```bash
-python3.13 -m venv .venv
-source .venv/bin/activate
-```
-
-Instale as dependências:
-
-```bash
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-O banco padrão é `sqlite:///./smartdesk.db`. Para apontar a aplicação a outro
-banco compatível com SQLAlchemy, defina `DATABASE_URL` antes de iniciar a API
-ou executar o comando de bootstrap.
+Se a política do PowerShell impedir a ativação do ambiente, use:
 
-Configure `JWT_SECRET_KEY` com pelo menos 32 bytes. Gere uma chave forte e
-mantenha-a em uma configuração segura do ambiente; não a inclua no código, no
-Git ou em mensagens:
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
 
-Windows (PowerShell):
+Defina uma chave JWT de desenvolvimento no terminal atual. Não reutilize essa
+chave em produção:
 
 ```powershell
 $env:JWT_SECRET_KEY = python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Linux/macOS:
+Sem `DATABASE_URL`, o backend usa `sqlite:///./smartdesk.db` localmente. Para
+usar PostgreSQL local, defina uma URL de conexão para um banco de
+desenvolvimento que já exista:
 
-```bash
-export JWT_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://usuario:senha@localhost:5432/smartdesk"
 ```
 
-Os arquivos `.env` são ignorados pelo Git. Configure variáveis de ambiente em
-cada sessão ou use uma solução de gerenciamento de segredos apropriada ao
-ambiente de implantação.
+As migrations são aplicadas quando a API inicia. Para iniciar o backend:
 
-## Migrations e primeiro administrador
+```powershell
+python -m uvicorn app.main:app --reload
+```
 
-As migrations do Alembic são aplicadas automaticamente quando a API inicia.
-Elas criam ou atualizam as tabelas necessárias, incluindo a associação dos
-chamados aos usuários. Chamados existentes são preservados; registros
-históricos sem proprietário permanecem com `requester_id` nulo.
+A API local fica em `http://127.0.0.1:8000`; a documentação fica em
+`http://127.0.0.1:8000/docs` e o health check em
+`http://127.0.0.1:8000/health`.
 
-Antes do primeiro login administrativo, crie o primeiro administrador:
+### Primeiro administrador local
 
-```bash
+O cadastro público cria somente solicitantes. Para criar ou promover um
+administrador, execute explicitamente:
+
+```powershell
 python -m app.bootstrap_admin admin@example.com
 ```
 
-O comando aplica as migrations, solicita a senha de forma interativa caso o
-usuário ainda não exista e cria sua conta. Se o usuário já existir, ele pode
-ser promovido a administrador. O comando não permite prosseguir quando já
-existe um administrador ativo.
+O comando exige exatamente uma empresa e interrompe se já houver administrador
+ativo. Para uma conta nova, solicita a senha de forma interativa. A aplicação
+nunca cria um administrador automaticamente.
 
-## Inicialização da API
+### Frontend local
 
-Com o ambiente virtual ativado e `JWT_SECRET_KEY` configurada, execute:
+Em outro terminal PowerShell, na raiz do repositório:
 
-```bash
-uvicorn app.main:app --reload
-```
-
-A API ficará disponível em `http://127.0.0.1:8000`. A documentação interativa
-do FastAPI está em `http://127.0.0.1:8000/docs`.
-
-## Dashboard web
-
-O frontend React + TypeScript fica em `frontend/` e usa o Vite durante o
-desenvolvimento. Em um terminal, inicie primeiro a API com a configuração
-descrita acima. Em outro terminal:
-
-```bash
-cd frontend
+```powershell
+Set-Location frontend
 npm install
 npm run dev
 ```
 
-Abra `http://127.0.0.1:5173`. O servidor Vite encaminha as chamadas `/api` para
-`http://127.0.0.1:8000`. Se a API estiver em outro endereço, defina
-`SMARTDESK_API_URL` antes de iniciar o servidor de desenvolvimento.
+Abra `http://127.0.0.1:5173`. Em desenvolvimento, chamadas relativas `/api`
+usam o proxy do Vite para `http://127.0.0.1:8000`. Se o backend estiver em
+outro endereço, defina `SMARTDESK_API_URL` antes de iniciar o Vite:
 
-Para gerar os arquivos otimizados de produção, execute dentro de `frontend/`:
-
-```bash
-npm run build
+```powershell
+$env:SMARTDESK_API_URL = "http://127.0.0.1:8001"
+npm run dev
 ```
 
-O resultado é gravado em `frontend/dist/`. Em produção, sirva o frontend e
-encaminhe `/api` à API no mesmo domínio, ou configure `VITE_API_BASE_URL` no
-build para apontar ao endereço da API com CORS configurado no ambiente.
+Também é possível definir `VITE_API_BASE_URL` para apontar o frontend
+diretamente a outra API. Variáveis `VITE_` são incorporadas ao build e não
+devem conter segredos.
 
-O Dashboard usa os endpoints de chamados e usuários existentes. Os indicadores,
-gráficos e filtros são calculados sobre os registros retornados pela API dentro
-do escopo permitido ao usuário. Administradores veem a visão geral e gerenciam
-atribuições; técnicos acessam a fila disponível e seus chamados; solicitantes
-acompanham os próprios chamados e podem abrir novos.
+## Banco de dados e migrations
 
-## Publicação online
+SQLite é o padrão somente fora do Render. A implantação no Render exige
+`DATABASE_URL` apontando para PostgreSQL; o backend rejeita SQLite nesse
+ambiente. URLs `postgres://` e `postgresql://` do provedor são normalizadas para
+o driver `psycopg`.
 
-O repositório inclui `netlify.toml` para publicar o frontend com base `frontend`,
-comando `npm run build`, diretório `dist` e fallback SPA para `index.html`.
-Configure no Netlify a variável de build `VITE_API_BASE_URL` com a origem HTTPS
-da API (por exemplo, `https://sua-api.example.com`, sem `/api/v1`). O frontend
-usa esse endereço para chamadas à API e para abrir sua documentação.
+As migrations avançam para `head` durante a inicialização. A migração legada
+adiciona a empresa inicial, associa os usuários existentes e atribui os
+chamados históricos a essa empresa, mantendo os chamados sem solicitante.
+As migrations não devem ser revertidas em produção sem um plano específico de
+preservação de dados. Não recrie o banco de produção para aplicar alterações.
 
-A API inclui um `Dockerfile` para hospedagem em um serviço que execute
-containers, como Render. Use um PostgreSQL gerenciado e persistente; SQLite é
-adequado para desenvolvimento e testes, não para o disco efêmero de um
-container de produção. O backend aceita URLs PostgreSQL `postgres://` e
-`postgresql://` e as adapta para o driver psycopg incluído nos requisitos.
+## Configuração da Gemini API
 
-Configure estas variáveis no serviço da API:
+A integração é opcional. Configure somente no ambiente do backend:
 
-| Variável | Valor |
+| Variável | Uso |
 |---|---|
-| `DATABASE_URL` | URL privada de conexão fornecida pelo PostgreSQL gerenciado. |
-| `JWT_SECRET_KEY` | Segredo aleatório com pelo menos 32 bytes. Gere e armazene no cofre de segredos do host; nunca use o exemplo de desenvolvimento nem o versionamento. |
-| `CORS_ORIGINS` | Origens exatas do frontend, separadas por vírgula e sem caminhos, como `https://seu-site.netlify.app` ou `https://seu-projeto.vercel.app`. Inclua os domínios de produção e preview que devem acessar a API. |
-| `PORT` | Normalmente fornecida automaticamente pelo host do container. |
+| `GEMINI_API_KEY` | Chave privada da API Gemini. Sem ela, a triagem responde `503`. |
+| `GEMINI_MODEL` | Modelo Gemini; padrão `gemini-2.5-flash`. |
 
-No Render, confirme que `DATABASE_URL` é a URL PostgreSQL interna do banco
-criado na mesma região (não a URL pública/externa) e que
-`JWT_SECRET_KEY` está definida. A aplicação falha explicitamente no startup se
-essas configurações forem inválidas ou se o Render tentar usar SQLite.
-`PORT` é injetada pelo Render; não é necessário fixar uma porta no painel.
+Nunca use nomes `VITE_` para a chave Gemini nem a inclua no frontend. A chave é
+enviada pelo servidor no cabeçalho da chamada ao provedor. A triagem requer
+autenticação de administrador ou técnico, e o resultado precisa ser revisado
+por uma pessoa.
 
-As migrations são aplicadas quando a API inicia. Depois que o banco existir,
-crie o administrador inicial executando `python -m app.bootstrap_admin
-admin@example.com` em um terminal/one-off job seguro do serviço com acesso às
-mesmas variáveis. Não habilite o cadastro público de administradores: o
-cadastro web cria somente solicitantes.
+## Testes e build
 
-Ordem recomendada: crie PostgreSQL e API, configure `JWT_SECRET_KEY` e
-`DATABASE_URL`, publique o frontend, então defina `CORS_ORIGINS` com a origem
-HTTPS exata emitida pelo Netlify ou Vercel (incluindo cada domínio de preview
-que deve ser permitido) e `VITE_API_BASE_URL` com a URL real da API. Não use
-coringas para liberar origens; o backend só habilita os domínios listados.
-Refaça o deploy do frontend após mudar a variável `VITE_API_BASE_URL`; variáveis `VITE_`
-são incorporadas durante o build. Valide `https://sua-api.example.com/health`,
-cadastro, login e chamados nos domínios implantados. Não publique segredos em
-issues, logs ou no repositório.
+Na raiz do repositório, com o ambiente Python ativado:
 
-O token JWT é mantido somente na memória da aplicação e enviado como
-`Authorization: Bearer`. Ele não é gravado em `localStorage` ou
-`sessionStorage`; portanto, atualizar ou fechar a página encerra a sessão e
-exige novo login. O backend não oferece refresh token. A API ainda não mantém
-eventos de alteração de chamados, então os detalhes mostram a criação e a
-última atualização disponíveis, não uma trilha histórica de status.
-
-### Triagem inteligente de chamados
-
-A API oferece `POST /api/v1/tickets/{ticket_id}/triage` para administradores e
-técnicos. O endpoint sugere categoria e prioridade e retorna um rascunho de
-resposta e justificativa; não altera o chamado e exige uma participação ativa
-no tenant dono do registro. O conteúdo do chamado é enviado ao provedor Gemini
-para análise, somente após a chamada autenticada ao endpoint.
-
-Configure `GEMINI_API_KEY` somente no ambiente do backend para habilitar o
-provedor principal. Opcionalmente, `GEMINI_MODEL` seleciona um modelo Gemini
-(padrão `gemini-2.5-flash`). Nunca configure a chave em variáveis `VITE_` ou
-no frontend. Sem chave, o endpoint responde `503`; falhas do provedor respondem
-`502`. A camada aceita múltiplos provedores e tenta o próximo quando um
-provedor falha; o fallback só estará disponível quando outros provedores forem
-configurados pelo backend.
-
-## Autenticação e autorização
-
-Cadastre-se em `POST /api/v1/auth/register` e autentique-se em
-`POST /api/v1/auth/login`. O cadastro público sempre cria um solicitante; não
-é possível escolher um perfil privilegiado pelo endpoint público. Senhas têm
-no mínimo 8 caracteres e são armazenadas com hash Argon2id.
-
-O login retorna um token JWT com validade de 30 minutos. Envie-o nas rotas
-protegidas pelo cabeçalho:
-
-```http
-Authorization: Bearer <token>
-```
-
-As rotas `/` e `/health` são públicas. Tokens inválidos, expirados ou de contas
-desativadas resultam em HTTP `401`; usuário autenticado sem permissão recebe
-HTTP `403`. O perfil atual é consultado no banco a cada requisição protegida.
-
-### Perfis e permissões
-
-| Perfil | Permissões |
-|---|---|
-| Solicitante (`requester`) | Abre chamados e lista ou consulta somente os próprios chamados. Não altera status. |
-| Técnico (`technician`) | Consulta chamados disponíveis e os atribuídos a si, assume chamados disponíveis e atualiza o status dos chamados atribuídos a si. |
-| Administrador (`admin`) | Consulta e gerencia chamados, inclusive registros históricos sem proprietário; gerencia perfis e ativações de usuários; atribui ou remove técnicos dos chamados. |
-
-Todo chamado novo recebe automaticamente o usuário autenticado como
-proprietário. Solicitantes não acessam chamados de terceiros. Chamados legados
-sem proprietário não são exibidos a solicitantes ou técnicos; somente
-administradores podem visualizá-los. A API valida essas permissões no servidor.
-
-Administradores podem ativar, desativar e alterar o perfil dos usuários. Não
-há exclusão definitiva de usuários, para preservar o histórico. Usuários
-desativados não podem fazer login e seus tokens existentes deixam de autorizar
-requisições. O sistema impede desativar ou rebaixar o último administrador
-ativo.
-
-## Endpoints disponíveis
-
-| Método | Endpoint | Acesso e descrição |
-|---|---|---|
-| GET | `/` | Público; retorna informações do serviço. |
-| GET | `/health` | Público; verifica a disponibilidade da API. |
-| POST | `/api/v1/auth/register` | Público; cadastra um solicitante. |
-| POST | `/api/v1/auth/login` | Público; autentica e retorna um token JWT. |
-| GET | `/api/v1/users` | Administrador; lista usuários. |
-| PATCH | `/api/v1/users/{user_id}/role` | Administrador; altera o perfil de usuário. |
-| PATCH | `/api/v1/users/{user_id}/active` | Administrador; ativa ou desativa uma conta. |
-| POST | `/api/v1/tickets` | Solicitante ou administrador; cria um chamado. |
-| GET | `/api/v1/tickets` | Autenticado; lista chamados conforme o perfil. |
-| GET | `/api/v1/tickets/available` | Técnico ou administrador; lista chamados disponíveis. |
-| POST | `/api/v1/tickets/{ticket_id}/claim` | Técnico; assume um chamado disponível. |
-| PATCH | `/api/v1/tickets/{ticket_id}/assignee` | Administrador; atribui ou remove a atribuição de um técnico. |
-| GET | `/api/v1/tickets/{ticket_id}` | Autenticado; consulta um chamado conforme as permissões do perfil. |
-| PATCH | `/api/v1/tickets/{ticket_id}/status` | Técnico atribuído ou administrador; atualiza o status. |
-
-### Exemplo de login
-
-Envie um JSON para `POST /api/v1/auth/login`:
-
-```json
-{
-  "email": "usuario@example.com",
-  "password": "uma-senha-segura"
-}
-```
-
-### Exemplo de criação de chamado
-
-Envie um JSON para `POST /api/v1/tickets` com um token de solicitante ou
-administrador:
-
-```json
-{
-  "title": "Computador sem acesso à internet",
-  "description": "Estação de trabalho não consegue acessar sites.",
-  "category": "rede",
-  "priority": "alta"
-}
-```
-
-## Testes automatizados
-
-Com as dependências instaladas e o ambiente virtual ativado, execute a partir
-da raiz do projeto:
-
-```bash
+```powershell
 pytest -v
 ```
 
-Os testes utilizam SQLite em memória ou bancos temporários para cobrir
-autenticação, permissões por perfil, operações administrativas simultâneas e
-migrations de bancos legados, sem alterar o banco local de desenvolvimento.
+Os testes usam bancos SQLite temporários/em memória para validar autenticação,
+autorização, isolamento, operações administrativas e migrações legadas; não
+precisam do PostgreSQL de produção nem de uma chave Gemini real.
 
-## Estado do desenvolvimento
+Para instalar as dependências e validar o frontend:
 
-O SmartDesk AI está em evolução contínua. A implementação atual inclui
-autenticação JWT, perfis de acesso, gestão de usuários, migrations e fluxo de
-atendimento de chamados. Não há cobrança, assinaturas, preços, planos, limites
-de uso ou recursos pagos implementados. A base multiempresa (`companies` e
-`memberships`) pode apoiar futuramente planos por empresa; antes disso, será
-necessário definir regras de plano e limites no backend e escolher/configurar
-um provedor de pagamentos. Nenhum preço ou recurso futuro é oferecido como
-disponível.
+```powershell
+Set-Location frontend
+npm install
+npm run build
+```
 
-## Autor
+O build executa `tsc --noEmit` e gera os arquivos estáticos em `frontend/dist`.
+O workflow do GitHub Actions executa `pytest -v` com Python 3.13 em pushes e
+pull requests para `main`.
 
-Uanderson Martins — [GitHub](https://github.com/Uanderson777)
+## Publicação: Vercel, Render e PostgreSQL
+
+### Frontend na Vercel
+
+O frontend é hospedado na Vercel. O link de implantação fornecido é
+[smartdesk-ai-1swde3w2f-uanderson777s-projects.vercel.app](https://smartdesk-ai-1swde3w2f-uanderson777s-projects.vercel.app).
+Não foi possível confirmar se essa implantação está configurada como Preview ou
+Production; portanto, trate-a como referência de implantação, não como domínio
+Production definitivo. A Vercel solicita autenticação ao consultar esse endereço
+sem uma sessão, e o status não fica verificável publicamente.
+
+Referências administrativas (não são endereços públicos principais para usuários):
+
+- [Projeto no painel da Vercel](https://vercel.com/uanderson777s-projects/smartdesk-ai-app)
+- [Detalhes da implantação informada](https://vercel.com/uanderson777s-projects/smartdesk-ai-app/BHKiffKgUkwNRchxSgqaHw5FEpew)
+
+O repositório não contém `vercel.json`; configure o projeto no painel da Vercel:
+
+- Root Directory: `frontend`
+- Framework Preset: Vite
+- Install Command: `npm install`
+- Build Command: `npm run build`
+- Output Directory: `dist`
+- Environment Variable `VITE_API_BASE_URL` (URL da API, não do frontend):
+  `https://smartdesk-ai-e8cr.onrender.com`
+
+Configure a variável na Vercel para Production e para outros ambientes somente
+se necessário. O frontend usa esse endereço como fallback de produção; após
+alterar a variável, faça um novo build/deploy. Não configure `VITE_API_BASE_URL`
+com um endereço da Vercel.
+
+O endereço Production público deve ser confirmado no painel da Vercel antes de
+ser divulgado como URL definitiva. A origem Vercel atualmente incluída por
+padrão no CORS é `https://smartdesk-ai-app.vercel.app`; se o domínio Production
+confirmado for diferente, configure a origem exata em `CORS_ORIGINS` no Render.
+Não adicione domínios Preview sem necessidade.
+
+### API no Render
+
+A API está hospedada em
+[smartdesk-ai-e8cr.onrender.com](https://smartdesk-ai-e8cr.onrender.com), com
+[documentação interativa](https://smartdesk-ai-e8cr.onrender.com/docs). O código
+está no [GitHub](https://github.com/Uanderson777/smartdesk-ai). O [Dockerfile](./Dockerfile)
+usa Python 3.13, executa o processo sem privilégios de root e inicia Uvicorn na
+porta `PORT` fornecida pelo Render (com fallback local para `8000`). Configure
+o serviço para construir a partir desse Dockerfile e use PostgreSQL persistente.
+
+Variáveis do serviço backend:
+
+| Variável | Configuração |
+|---|---|
+| `DATABASE_URL` | URL privada do PostgreSQL persistente; nunca use SQLite em produção. |
+| `JWT_SECRET_KEY` | Segredo aleatório com pelo menos 32 bytes, mantido no cofre de segredos do Render. |
+| `CORS_ORIGINS` | Origens exatas adicionais, separadas por vírgula e sem caminhos. O backend sempre inclui `https://smartdesk-ai-app.vercel.app`. |
+| `GEMINI_API_KEY` | Opcional; manter exclusivamente no backend. |
+| `GEMINI_MODEL` | Opcional; padrão `gemini-2.5-flash`. |
+| `PORT` | Injetada pelo Render; não fixe manualmente. |
+
+O backend permite os métodos `GET`, `POST` e `PATCH` e os headers
+`Authorization` e `Content-Type`, necessários às rotas existentes. Domínios
+Vercel de preview só devem ser adicionados a `CORS_ORIGINS` quando precisarem
+de acesso. Não use curingas.
+
+O health check do serviço é `https://smartdesk-ai-e8cr.onrender.com/health`.
+As migrations são aplicadas durante a inicialização da API. O administrador
+inicial deve ser criado manualmente, em uma execução controlada com acesso ao
+banco e às variáveis do serviço, usando `python -m app.bootstrap_admin
+admin@example.com`. Não execute esse comando em cada deploy.
+
+## Endpoints implementados
+
+| Método | Endpoint | Acesso |
+|---|---|---|
+| `GET` | `/` | Público; informações do serviço. |
+| `GET` | `/health` | Público; health check. |
+| `POST` | `/api/v1/auth/register` | Público; cria solicitante. |
+| `POST` | `/api/v1/auth/login` | Público; autentica; aceita `company_id` quando necessário. |
+| `GET` | `/api/v1/auth/me` | Autenticado; dados do usuário atual. |
+| `GET` | `/api/v1/users` | Administrador; lista usuários do tenant ativo. |
+| `PATCH` | `/api/v1/users/{user_id}/role` | Administrador; altera perfil no tenant ativo. |
+| `PATCH` | `/api/v1/users/{user_id}/active` | Administrador; ativa ou desativa associação. |
+| `POST` | `/api/v1/tickets` | Solicitante ou administrador; cria chamado. |
+| `GET` | `/api/v1/tickets` | Autenticado; lista chamados permitidos ao perfil. |
+| `GET` | `/api/v1/tickets/available` | Técnico ou administrador; lista chamados disponíveis. |
+| `GET` | `/api/v1/tickets/{ticket_id}` | Autenticado; consulta chamado dentro do tenant. |
+| `POST` | `/api/v1/tickets/{ticket_id}/claim` | Técnico; assume chamado disponível. |
+| `PATCH` | `/api/v1/tickets/{ticket_id}/assignee` | Administrador; atribui/remove técnico. |
+| `PATCH` | `/api/v1/tickets/{ticket_id}/status` | Técnico atribuído ou administrador; altera status. |
+| `POST` | `/api/v1/tickets/{ticket_id}/triage` | Administrador ou técnico; solicita sugestão Gemini. |
+
+Rotas protegidas usam `Authorization: Bearer <token>`. O token tem validade de
+30 minutos, permanece somente na memória do frontend e não há refresh token.
+
+## Segurança e limitações conhecidas
+
+- Senhas são armazenadas com Argon2id e não retornadas pelas rotas de usuário.
+- A autorização e o escopo do tenant são verificados no backend.
+- A chave Gemini não é entregue ao navegador.
+- Chamados e usuários não são apagados pela interface de gestão.
+- O cadastro público não permite criar contas administrativas.
+- Não existe trilha histórica de alterações/status do chamado.
+- A triagem da IA gera somente recomendações e rascunhos; não altera nem envia
+  respostas automaticamente.

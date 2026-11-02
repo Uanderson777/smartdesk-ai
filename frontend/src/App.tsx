@@ -11,6 +11,10 @@ import {
   ClipboardList,
   Clock3,
   Command,
+  BookOpen,
+  ExternalLink,
+  Github,
+  Globe2,
   Headphones,
   LayoutDashboard,
   LifeBuoy,
@@ -19,6 +23,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Server,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -34,6 +39,7 @@ import type {
   TicketPriority,
   TicketStatus,
   TicketTriageResponse,
+  TenantOption,
   User,
   UserRole,
 } from "./types";
@@ -127,6 +133,27 @@ function priorityClass(priority: TicketPriority) {
   return `priority-dot priority-${priority}`;
 }
 
+function tenantOptionsFromError(error: ApiError): TenantOption[] {
+  const detail = error.detail;
+  if (
+    typeof detail !== "object" ||
+    detail === null ||
+    !("companies" in detail) ||
+    !Array.isArray(detail.companies)
+  ) {
+    return [];
+  }
+  return detail.companies.filter(
+    (company): company is TenantOption =>
+      typeof company === "object" &&
+      company !== null &&
+      "id" in company &&
+      typeof company.id === "number" &&
+      "name" in company &&
+      typeof company.name === "string",
+  );
+}
+
 function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [page, setPage] = useState<Page>("dashboard");
@@ -142,6 +169,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [tenantOptions, setTenantOptions] = useState<TenantOption[]>([]);
   const [selected, setSelected] = useState<Ticket | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -217,12 +245,16 @@ function App() {
     });
   }, [tickets, filters, searchTerm]);
 
-  const handleLogin = async (email: string, password: string) => {
+  const handleLogin = async (
+    email: string,
+    password: string,
+    companyId?: number,
+  ) => {
     setAuthLoading(true);
     setError("");
     setNotice("");
     try {
-      const result = await api.login(email, password);
+      const result = await api.login(email, password, companyId);
       const [user, role] = await Promise.all([
         api.currentUser(result.access_token),
         api.identifyRole(result.access_token),
@@ -233,7 +265,12 @@ function App() {
         fullName: user.full_name,
         role,
       });
+      setTenantOptions([]);
     } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 409) {
+        const options = tenantOptionsFromError(requestError);
+        if (options.length > 0) setTenantOptions(options);
+      }
       setError(
         requestError instanceof Error
           ? requestError.message
@@ -290,6 +327,7 @@ function App() {
         error={error}
         notice={notice}
         loading={authLoading}
+        companies={tenantOptions}
         onLogin={handleLogin}
         onRegister={handleRegister}
       />
@@ -1058,13 +1096,19 @@ function LoginScreen({
   error,
   notice,
   loading,
+  companies,
   onLogin,
   onRegister,
 }: {
   error: string;
   notice: string;
   loading: boolean;
-  onLogin: (email: string, password: string) => Promise<void>;
+  companies: TenantOption[];
+  onLogin: (
+    email: string,
+    password: string,
+    companyId?: number,
+  ) => Promise<void>;
   onRegister: (
     fullName: string,
     email: string,
@@ -1075,6 +1119,7 @@ function LoginScreen({
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [companyId, setCompanyId] = useState("");
   return (
     <main className="auth-page">
       <div className="auth-visual">
@@ -1100,7 +1145,11 @@ function LoginScreen({
             if (registerMode) {
               void onRegister(fullName, email, password).then((success) => { if (success) setRegisterMode(false); });
             } else {
-              void onLogin(email, password);
+              void onLogin(
+                email,
+                password,
+                companyId ? Number(companyId) : undefined,
+              );
             }
           }}>
             {registerMode && (
@@ -1119,10 +1168,52 @@ function LoginScreen({
             )}
             <label className="form-field"><span>E-mail</span><input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com" /></label>
             <label className="form-field"><span>Senha</span><input type="password" autoComplete={registerMode ? "new-password" : "current-password"} minLength={registerMode ? 8 : 1} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Sua senha" /></label>
+            {!registerMode && companies.length > 0 && (
+              <label className="form-field">
+                <span>Empresa</span>
+                <select
+                  required
+                  value={companyId}
+                  onChange={(event) => setCompanyId(event.target.value)}
+                >
+                  <option value="" disabled>Selecione uma empresa</option>
+                  {companies.map((company) => (
+                    <option key={company.id} value={company.id}>
+                      {company.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <button className="button button-primary auth-submit" disabled={loading}>{loading ? "Aguarde..." : registerMode ? "Criar conta" : "Entrar no workspace"}<ChevronRight size={17} /></button>
           </form>
-          <div className="auth-switch">{registerMode ? "Já tem uma conta?" : "Ainda não tem uma conta?"}<button onClick={() => { setRegisterMode(!registerMode); }}>{registerMode ? "Fazer login" : "Criar conta"}</button></div>
+          <div className="auth-switch">{registerMode ? "Já tem uma conta?" : "Ainda não tem uma conta?"}<button onClick={() => { setRegisterMode(!registerMode); setCompanyId(""); }}>{registerMode ? "Fazer login" : "Criar conta"}</button></div>
           <div className="auth-security"><ShieldCheck size={16} /><span>Conexão autenticada · sessão protegida em memória</span></div>
+          <section className="project-links" aria-labelledby="project-links-title">
+            <h3 id="project-links-title">SmartDesk AI — Projeto e infraestrutura</h3>
+            <div className="project-links-grid">
+              <a href="https://github.com/Uanderson777/smartdesk-ai" target="_blank" rel="noopener noreferrer">
+                <Github size={16} aria-hidden="true" />
+                <span><strong>Código-fonte</strong><small>GitHub</small></span>
+                <ExternalLink size={13} aria-hidden="true" />
+              </a>
+              <a href="https://smartdesk-ai-1swde3w2f-uanderson777s-projects.vercel.app" target="_blank" rel="noopener noreferrer">
+                <Globe2 size={16} aria-hidden="true" />
+                <span><strong>Abrir aplicação</strong><small>Implantação · ambiente não confirmado</small></span>
+                <ExternalLink size={13} aria-hidden="true" />
+              </a>
+              <a href="https://smartdesk-ai-e8cr.onrender.com/docs" target="_blank" rel="noopener noreferrer">
+                <BookOpen size={16} aria-hidden="true" />
+                <span><strong>Documentação da API</strong><small>Render · /docs</small></span>
+                <ExternalLink size={13} aria-hidden="true" />
+              </a>
+              <a href="https://smartdesk-ai-e8cr.onrender.com" target="_blank" rel="noopener noreferrer">
+                <Server size={16} aria-hidden="true" />
+                <span><strong>Backend</strong><small>API pública · Render</small></span>
+                <ExternalLink size={13} aria-hidden="true" />
+              </a>
+            </div>
+          </section>
         </div>
         <span className="auth-copyright">© 2026 SmartDesk AI · Service Desk</span>
       </div>

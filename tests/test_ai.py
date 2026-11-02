@@ -44,9 +44,11 @@ class StubProvider:
     def __init__(self, result: object | Exception) -> None:
         self.result = result
         self.calls = 0
+        self.received_tickets: list[TicketTriageInput] = []
 
     def analyze(self, ticket: TicketTriageInput) -> TriageRecommendation:
         self.calls += 1
+        self.received_tickets.append(ticket)
         if isinstance(self.result, Exception):
             raise self.result
         return TriageRecommendation.model_validate(self.result)
@@ -204,6 +206,7 @@ class TriageApiFixture:
     admin_token: str
     technician_token: str
     requester_token: str
+    foreign_technician_token: str
     foreign_ticket_id: int
     ticket_id: int
     assigned_ticket_id: int
@@ -339,6 +342,9 @@ def triage_api(
                     "requester_token": create_access_token(
                         str(requester.id), tenant_id=company_a.id
                     ),
+                    "foreign_technician_token": create_access_token(
+                        str(foreign_user.id), tenant_id=company_b.id
+                    ),
                     "foreign_ticket_id": foreign_ticket.id,
                     "ticket_id": ticket.id,
                     "assigned_ticket_id": assigned_ticket.id,
@@ -398,6 +404,20 @@ def test_triage_endpoint_rejects_requester_role(
     assert provider.calls == 0
 
 
+def test_triage_endpoint_requires_authentication(
+    triage_api: TriageApiFixture,
+) -> None:
+    provider = StubProvider(make_recommendation())
+    install_triage_service(triage_api, TicketTriageService([provider]))
+
+    response = triage_api.client.post(
+        f"/api/v1/tickets/{triage_api.ticket_id}/triage",
+    )
+
+    assert response.status_code == 401
+    assert provider.calls == 0
+
+
 def test_triage_endpoint_hides_other_tenants_tickets(
     triage_api: TriageApiFixture,
 ) -> None:
@@ -411,6 +431,39 @@ def test_triage_endpoint_hides_other_tenants_tickets(
 
     assert response.status_code == 404
     assert provider.calls == 0
+
+
+def test_triage_endpoint_isolates_tenant_access(
+    triage_api: TriageApiFixture,
+) -> None:
+    provider = StubProvider(make_recommendation())
+    install_triage_service(triage_api, TicketTriageService([provider]))
+
+    denied_response = triage_api.client.post(
+        f"/api/v1/tickets/{triage_api.foreign_ticket_id}/triage",
+        headers={"Authorization": f"Bearer {triage_api.admin_token}"},
+    )
+
+    assert denied_response.status_code == 404
+    assert provider.calls == 0
+
+    allowed_response = triage_api.client.post(
+        f"/api/v1/tickets/{triage_api.foreign_ticket_id}/triage",
+        headers={
+            "Authorization": f"Bearer {triage_api.foreign_technician_token}"
+        },
+    )
+
+    assert allowed_response.status_code == 200
+    assert allowed_response.json()["ticket_id"] == triage_api.foreign_ticket_id
+    assert provider.received_tickets == [
+        TicketTriageInput(
+            title="Chamado de outro tenant",
+            description="Este conteúdo não deve sair do tenant.",
+            current_category="software",
+            current_priority="alta",
+        )
+    ]
 
 
 def test_triage_endpoint_reports_missing_provider_configuration(
