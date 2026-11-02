@@ -21,6 +21,7 @@ implementado atualmente.
 - PyJWT
 - pwdlib com Argon2id
 - Pytest
+- Gemini API (opcional, para triagem inteligente)
 
 ## Requisitos
 
@@ -164,7 +165,7 @@ Configure estas variáveis no serviço da API:
 |---|---|
 | `DATABASE_URL` | URL privada de conexão fornecida pelo PostgreSQL gerenciado. |
 | `JWT_SECRET_KEY` | Segredo aleatório com pelo menos 32 bytes. Gere e armazene no cofre de segredos do host; nunca use o exemplo de desenvolvimento nem o versionamento. |
-| `CORS_ORIGINS` | Origens exatas do frontend, separadas por vírgula e sem caminhos, como `https://seu-site.netlify.app`. |
+| `CORS_ORIGINS` | Origens exatas do frontend, separadas por vírgula e sem caminhos, como `https://seu-site.netlify.app` ou `https://seu-projeto.vercel.app`. Inclua os domínios de produção e preview que devem acessar a API. |
 | `PORT` | Normalmente fornecida automaticamente pelo host do container. |
 
 No Render, confirme que `DATABASE_URL` é a URL PostgreSQL interna do banco
@@ -180,9 +181,11 @@ mesmas variáveis. Não habilite o cadastro público de administradores: o
 cadastro web cria somente solicitantes.
 
 Ordem recomendada: crie PostgreSQL e API, configure `JWT_SECRET_KEY` e
-`DATABASE_URL`, publique o frontend, então defina `CORS_ORIGINS` com o domínio
-real emitido pelo Netlify e `VITE_API_BASE_URL` com a URL real da API. Refaça o
-deploy do frontend após mudar a variável `VITE_API_BASE_URL`; variáveis `VITE_`
+`DATABASE_URL`, publique o frontend, então defina `CORS_ORIGINS` com a origem
+HTTPS exata emitida pelo Netlify ou Vercel (incluindo cada domínio de preview
+que deve ser permitido) e `VITE_API_BASE_URL` com a URL real da API. Não use
+coringas para liberar origens; o backend só habilita os domínios listados.
+Refaça o deploy do frontend após mudar a variável `VITE_API_BASE_URL`; variáveis `VITE_`
 são incorporadas durante o build. Valide `https://sua-api.example.com/health`,
 cadastro, login e chamados nos domínios implantados. Não publique segredos em
 issues, logs ou no repositório.
@@ -193,6 +196,22 @@ O token JWT é mantido somente na memória da aplicação e enviado como
 exige novo login. O backend não oferece refresh token. A API ainda não mantém
 eventos de alteração de chamados, então os detalhes mostram a criação e a
 última atualização disponíveis, não uma trilha histórica de status.
+
+### Triagem inteligente de chamados
+
+A API oferece `POST /api/v1/tickets/{ticket_id}/triage` para administradores e
+técnicos. O endpoint sugere categoria e prioridade e retorna um rascunho de
+resposta e justificativa; não altera o chamado e exige uma participação ativa
+no tenant dono do registro. O conteúdo do chamado é enviado ao provedor Gemini
+para análise, somente após a chamada autenticada ao endpoint.
+
+Configure `GEMINI_API_KEY` somente no ambiente do backend para habilitar o
+provedor principal. Opcionalmente, `GEMINI_MODEL` seleciona um modelo Gemini
+(padrão `gemini-2.5-flash`). Nunca configure a chave em variáveis `VITE_` ou
+no frontend. Sem chave, o endpoint responde `503`; falhas do provedor respondem
+`502`. A camada aceita múltiplos provedores e tenta o próximo quando um
+provedor falha; o fallback só estará disponível quando outros provedores forem
+configurados pelo backend.
 
 ## Autenticação e autorização
 
