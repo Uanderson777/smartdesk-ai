@@ -52,6 +52,23 @@ def test_normalize_database_url(url, expected):
     assert normalize_database_url(url) == expected
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "POSTGRES://db.example:5432/smartdesk",
+        "PostgreSQL://db.example:5432/smartdesk",
+        "PostgreSQL+Psycopg://db.example:5432/smartdesk",
+    ],
+)
+def test_normalize_database_url_accepts_case_insensitive_postgresql_scheme(url):
+    normalized_url = normalize_database_url(url)
+
+    assert normalized_url == (
+        "postgresql+psycopg://db.example:5432/smartdesk"
+    )
+    assert make_url(normalized_url).drivername == "postgresql+psycopg"
+
+
 def test_database_url_defaults_to_sqlite_outside_render():
     assert database_url_from_environment({}) == "sqlite:///./smartdesk.db"
 
@@ -105,6 +122,17 @@ def test_database_url_rejects_invalid_quotes_and_unsupported_drivers(url):
         database_url_from_environment({"DATABASE_URL": url})
 
     assert url not in str(error.value)
+
+
+def test_invalid_database_url_logs_parser_error_without_exposing_value(caplog):
+    invalid_url = "not-a-url-with-sensitive-marker"
+
+    with caplog.at_level("ERROR", logger="app.database"):
+        with pytest.raises(RuntimeError, match="value redacted"):
+            database_url_from_environment({"DATABASE_URL": invalid_url})
+
+    assert "ArgumentError" in caplog.text
+    assert invalid_url not in caplog.text
 
 
 def test_database_url_decodes_percent_encoded_credentials():
@@ -224,6 +252,37 @@ def test_cors_preflight_allows_local_frontend(client):
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_cors_preflight_allows_production_frontend(client):
+    response = client.options(
+        "/api/v1/auth/login",
+        headers={
+            "Origin": "https://smartdesk-ai-app.vercel.app",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.headers["access-control-allow-origin"]
+        == "https://smartdesk-ai-app.vercel.app"
+    )
+
+
+def test_cors_preflight_rejects_unlisted_origin(client):
+    response = client.options(
+        "/api/v1/auth/login",
+        headers={
+            "Origin": "https://unlisted.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
 
 
 def test_default_cors_origins_include_vercel_frontend():

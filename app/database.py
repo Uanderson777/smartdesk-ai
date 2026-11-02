@@ -1,3 +1,4 @@
+import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -8,12 +9,16 @@ from sqlalchemy import create_engine, make_url
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
+logger = logging.getLogger(__name__)
+
 
 def normalize_database_url(url: str) -> str:
-    if url.startswith("postgres://"):
-        return url.replace("postgres://", "postgresql+psycopg://", 1)
-    if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+    scheme, separator, remainder = url.partition("://")
+    if not separator:
+        return url
+
+    if scheme.lower() in ("postgres", "postgresql", "postgresql+psycopg"):
+        return f"postgresql+psycopg://{remainder}"
     return url
 
 
@@ -50,8 +55,16 @@ def database_url_from_environment(environment: Mapping[str, str]) -> str:
     url = normalize_database_url(database_url or "sqlite:///./smartdesk.db")
     try:
         parsed_url = make_url(url)
-    except ArgumentError:
-        raise RuntimeError("DATABASE_URL must be a valid SQLAlchemy URL.") from None
+    except ArgumentError as error:
+        logger.error(
+            "SQLAlchemy could not parse DATABASE_URL; value redacted "
+            "(parser_error=%s).",
+            type(error).__name__,
+        )
+        raise RuntimeError(
+            "DATABASE_URL must be a valid SQLAlchemy URL; "
+            "check its scheme and percent-encoding (value redacted)."
+        ) from None
 
     backend = parsed_url.get_backend_name()
     if is_render and backend != "postgresql":
