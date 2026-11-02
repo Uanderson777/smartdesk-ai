@@ -6,8 +6,8 @@ gerenciamento de usuários e atendimento de chamados.
 - **Implantação informada:** https://smartdesk-ai-1swde3w2f-uanderson777s-projects.vercel.app
   (status Production/Preview não confirmado; veja [Publicação](#publicação-vercel-render-e-postgresql))
 - **Repositório:** https://github.com/Uanderson777/smartdesk-ai
-- **API:** https://smartdesk-ai-e8cr.onrender.com
-- **Verificação da API:** https://smartdesk-ai-e8cr.onrender.com/health
+- **API:** https://smartdesk-ai-0rev.onrender.com
+- **Verificação da API:** https://smartdesk-ai-0rev.onrender.com/health
 
 ## Funcionalidades implementadas
 
@@ -214,7 +214,7 @@ O repositório não contém `vercel.json`; configure o projeto no painel da Verc
 - Build Command: `npm run build`
 - Output Directory: `dist`
 - Environment Variable `VITE_API_BASE_URL` (URL da API, não do frontend):
-  `https://smartdesk-ai-e8cr.onrender.com`
+  `https://smartdesk-ai-0rev.onrender.com`
 
 Configure a variável na Vercel para Production e para outros ambientes somente
 se necessário. O frontend usa esse endereço como fallback de produção; após
@@ -230,8 +230,8 @@ Não adicione domínios Preview sem necessidade.
 ### API no Render
 
 A API está hospedada em
-[smartdesk-ai-e8cr.onrender.com](https://smartdesk-ai-e8cr.onrender.com), com
-[documentação interativa](https://smartdesk-ai-e8cr.onrender.com/docs). O código
+[smartdesk-ai-0rev.onrender.com](https://smartdesk-ai-0rev.onrender.com), com
+[documentação interativa](https://smartdesk-ai-0rev.onrender.com/docs). O código
 está no [GitHub](https://github.com/Uanderson777/smartdesk-ai). O [Dockerfile](./Dockerfile)
 usa Python 3.13, executa o processo sem privilégios de root e inicia Uvicorn na
 porta `PORT` fornecida pelo Render (com fallback local para `8000`). Configure
@@ -253,7 +253,7 @@ O backend permite os métodos `GET`, `POST` e `PATCH` e os headers
 Vercel de preview só devem ser adicionados a `CORS_ORIGINS` quando precisarem
 de acesso. Não use curingas.
 
-O health check do serviço é `https://smartdesk-ai-e8cr.onrender.com/health`.
+O health check do serviço é `https://smartdesk-ai-0rev.onrender.com/health`.
 As migrations são aplicadas durante a inicialização da API. O administrador
 inicial deve ser criado manualmente, em uma execução controlada com acesso ao
 banco e às variáveis do serviço, usando `python -m app.bootstrap_admin

@@ -1202,12 +1202,12 @@ function LoginScreen({
                 <span><strong>Abrir aplicação</strong><small>Implantação · ambiente não confirmado</small></span>
                 <ExternalLink size={13} aria-hidden="true" />
               </a>
-              <a href="https://smartdesk-ai-e8cr.onrender.com/docs" target="_blank" rel="noopener noreferrer">
+              <a href="https://smartdesk-ai-0rev.onrender.com/docs" target="_blank" rel="noopener noreferrer">
                 <BookOpen size={16} aria-hidden="true" />
                 <span><strong>Documentação da API</strong><small>Render · /docs</small></span>
                 <ExternalLink size={13} aria-hidden="true" />
               </a>
-              <a href="https://smartdesk-ai-e8cr.onrender.com" target="_blank" rel="noopener noreferrer">
+              <a href="https://smartdesk-ai-0rev.onrender.com" target="_blank" rel="noopener noreferrer">
                 <Server size={16} aria-hidden="true" />
                 <span><strong>Backend</strong><small>API pública · Render</small></span>
                 <ExternalLink size={13} aria-hidden="true" />

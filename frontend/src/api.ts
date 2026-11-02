@@ -13,7 +13,7 @@ import type {
 
 export const API_BASE = (
   import.meta.env.VITE_API_BASE_URL?.trim() ||
-  (import.meta.env.DEV ? "" : "https://smartdesk-ai-e8cr.onrender.com")
+  (import.meta.env.DEV ? "" : "https://smartdesk-ai-0rev.onrender.com")
 ).replace(/\/+$/, "");
 const API_REQUEST_TIMEOUT_MS = 60_000;
 
