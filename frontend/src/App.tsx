@@ -33,6 +33,7 @@ import type {
   TicketFilters,
   TicketPriority,
   TicketStatus,
+  TicketTriageResponse,
   User,
   UserRole,
 } from "./types";
@@ -504,8 +505,10 @@ function App() {
       )}
       {selected && session && (
         <TicketDetail
+          key={selected.id}
           ticket={selected}
           role={session.role}
+          token={session.token}
           users={users}
           onClose={() => setSelected(null)}
           onStatusChange={(status) => void withAction(() => api.updateStatus(session.token, selected.id, status), "Status atualizado.")}
@@ -890,6 +893,7 @@ function UsersPage({
 function TicketDetail({
   ticket,
   role,
+  token,
   users,
   onClose,
   onStatusChange,
@@ -897,13 +901,35 @@ function TicketDetail({
 }: {
   ticket: Ticket;
   role: UserRole;
+  token: string;
   users: User[];
   onClose: () => void;
   onStatusChange: (status: TicketStatus) => void;
   onAssigneeChange: (technicianId: number | null) => void;
 }) {
+  const [triage, setTriage] = useState<TicketTriageResponse | null>(null);
+  const [responseDraft, setResponseDraft] = useState("");
+  const [triageLoading, setTriageLoading] = useState(false);
+  const [triageError, setTriageError] = useState("");
   const canUpdate = role === "admin" || (role === "technician" && ticket.assigned_technician_id !== null);
   const technicians = users.filter((user) => user.role === "technician" && user.is_active);
+
+  const analyzeTicket = async () => {
+    setTriageLoading(true);
+    setTriageError("");
+    try {
+      setTriage(await api.triageTicket(token, ticket.id));
+    } catch (requestError) {
+      setTriageError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Não foi possível analisar o chamado.",
+      );
+    } finally {
+      setTriageLoading(false);
+    }
+  };
+
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title">
@@ -914,6 +940,54 @@ function TicketDetail({
         </div>
         <div className="drawer-body">
           <div className="detail-section"><h3>Descrição</h3><p className="ticket-description">{ticket.description}</p></div>
+          {role !== "requester" && (
+            <section className="ai-panel" aria-labelledby="ai-panel-title">
+              <div className="ai-panel-heading">
+                <h3 id="ai-panel-title">Análise Inteligente (Gemini)</h3>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => void analyzeTicket()}
+                  disabled={triageLoading}
+                >
+                  <Sparkles size={14} />
+                  {triageLoading ? "Analisando..." : triage ? "Atualizar análise" : "Analisar chamado"}
+                </button>
+              </div>
+              <p className="ai-panel-note">As sugestões são rascunhos para revisão; nenhuma resposta será enviada automaticamente.</p>
+              {triageError && <div className="inline-error" role="alert">{triageError}</div>}
+              {triage && (
+                <>
+                  <div className="ai-recommendations">
+                    <div><span>Prioridade sugerida</span><strong>{priorityLabels[triage.priority]}</strong></div>
+                    <div><span>Categoria sugerida</span><strong>{categoryLabels[triage.category]}</strong></div>
+                    <div className="ai-rationale"><span>Justificativa</span><p>{triage.rationale}</p></div>
+                    <div className="ai-response">
+                      <span>Rascunho de resposta</span>
+                      <p>{triage.response_draft}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="button button-primary ai-use-response"
+                    onClick={() => setResponseDraft(triage.response_draft)}
+                  >
+                    Usar Resposta Sugerida
+                  </button>
+                  <label className="form-field ai-response-field">
+                    <span>Resposta para revisão</span>
+                    <textarea
+                      rows={4}
+                      maxLength={3000}
+                      value={responseDraft}
+                      onChange={(event) => setResponseDraft(event.target.value)}
+                    />
+                    <small>Este texto permanece como rascunho nesta tela e não é enviado nem salvo.</small>
+                  </label>
+                </>
+              )}
+            </section>
+          )}
           <div className="detail-info-grid">
             <InfoCell label="Categoria" value={categoryLabels[ticket.category]} />
             <InfoCell label="Solicitante" value={ticket.requester_id === null ? "Registro histórico" : `Usuário #${ticket.requester_id}`} />

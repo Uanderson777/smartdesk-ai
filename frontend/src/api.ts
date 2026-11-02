@@ -1,14 +1,27 @@
+import axios, { AxiosHeaders, type Method } from "axios";
 import type {
   AccessToken,
   Ticket,
   TicketCategory,
   TicketPriority,
   TicketStatus,
+  TicketTriageResponse,
   User,
   UserRole,
 } from "./types";
 
-export const API_BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, "") ?? "";
+export const API_BASE = (
+  import.meta.env.VITE_API_BASE_URL?.trim() ||
+  "https://smartdesk-ai-e8cr.onrender.com"
+).replace(/\/+$/, "");
+const API_REQUEST_TIMEOUT_MS = 60_000;
+
+const apiClient = axios.create({
+  baseURL: API_BASE,
+  timeout: API_REQUEST_TIMEOUT_MS,
+  transitional: { clarifyTimeoutError: true },
+  headers: { "Content-Type": "application/json" },
+});
 
 export class ApiError extends Error {
   constructor(
@@ -20,45 +33,60 @@ export class ApiError extends Error {
   }
 }
 
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error: unknown) => {
+    if (!axios.isAxiosError(error)) return Promise.reject(error);
+
+    const response = error.response;
+    if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") {
+      return Promise.reject(
+        new ApiError(
+          "A API demorou para responder. Ela pode estar iniciando; tente novamente em instantes.",
+          0,
+        ),
+      );
+    }
+
+    if (!response) {
+      return Promise.reject(
+        new ApiError(
+          `Não foi possível conectar à API em ${API_BASE}. Verifique se o serviço está disponível e se o CORS permite este site.`,
+          0,
+        ),
+      );
+    }
+
+    let message = `A API retornou erro ${response.status}.`;
+    const detail = response.data?.detail as
+      | string
+      | Array<{ msg?: string }>
+      | undefined;
+    if (typeof detail === "string") {
+      message = detail;
+    } else if (Array.isArray(detail)) {
+      message = detail.map((item) => item.msg ?? "Dados inválidos.").join(" ");
+    }
+
+    return Promise.reject(new ApiError(message, response.status));
+  },
+);
+
 async function request<T>(
   path: string,
   token?: string,
-  init: RequestInit = {},
+  init: { method?: Method; body?: string } = {},
 ): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body) headers.set("Content-Type", "application/json");
+  const headers = new AxiosHeaders();
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE}${path}`, {
-      ...init,
-      headers,
-    });
-  } catch {
-    throw new ApiError(
-      "Não foi possível conectar à API. Verifique se o backend está em execução.",
-      0,
-    );
-  }
-
-  if (!response.ok) {
-    let detail = `A API retornou erro ${response.status}.`;
-    try {
-      const body: { detail?: string | Array<{ msg?: string }> } =
-        await response.json();
-      if (typeof body.detail === "string") detail = body.detail;
-      else if (Array.isArray(body.detail)) {
-        detail = body.detail.map((item) => item.msg ?? "Dados inválidos.").join(" ");
-      }
-    } catch {
-      // Keep the HTTP status message when the response is not JSON.
-    }
-    throw new ApiError(detail, response.status);
-  }
-
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  const response = await apiClient.request<T>({
+    url: path,
+    method: init.method,
+    data: init.body,
+    headers,
+  });
+  return response.data;
 }
 
 export const api = {
@@ -145,6 +173,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+
+  triageTicket: (token: string, ticketId: number) =>
+    request<TicketTriageResponse>(
+      `/api/v1/tickets/${ticketId}/triage`,
+      token,
+      { method: "POST" },
+    ),
 
   claimTicket: (token: string, ticketId: number) =>
     request<Ticket>(`/api/v1/tickets/${ticketId}/claim`, token, {

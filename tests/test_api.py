@@ -9,7 +9,8 @@ from alembic import command
 from alembic.config import Config
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, inspect, make_url, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -76,6 +77,94 @@ def test_render_normalizes_postgresql_database_url():
     ) == "postgresql+psycopg://user:password@db.example:5432/smartdesk"
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "  postgresql://fake-user:fake-password@db.example:5432/smartdesk  ",
+        '"postgresql://fake-user:fake-password@db.example:5432/smartdesk"',
+        "'postgresql://fake-user:fake-password@db.example:5432/smartdesk'",
+    ],
+)
+def test_database_url_strips_whitespace_and_balanced_quotes(url):
+    assert database_url_from_environment({"DATABASE_URL": url}) == (
+        "postgresql+psycopg://fake-user:fake-password@db.example:5432/smartdesk"
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "not-a-sqlalchemy-url",
+        "'postgresql://fake-user:fake-password@db.example:5432/smartdesk",
+        '"postgresql://fake-user:fake-password@db.example:5432/smartdesk\'',
+        "postgresql+asyncpg://fake-user:fake-password@db.example:5432/smartdesk",
+    ],
+)
+def test_database_url_rejects_invalid_quotes_and_unsupported_drivers(url):
+    with pytest.raises(RuntimeError) as error:
+        database_url_from_environment({"DATABASE_URL": url})
+
+    assert url not in str(error.value)
+
+
+def test_database_url_decodes_percent_encoded_credentials():
+    url = database_url_from_environment(
+        {
+            "RENDER": "true",
+            "DATABASE_URL": (
+                "postgresql://fake%40user:fake%3Apassword"
+                "@db.example:5432/smartdesk"
+            ),
+        }
+    )
+    parsed_url = make_url(url)
+
+    assert parsed_url.drivername == "postgresql+psycopg"
+    assert parsed_url.username == "fake@user"
+    assert parsed_url.password == "fake:password"
+
+
+def test_lifespan_runs_alembic_migrations(test_engine):
+    with TestClient(app):
+        assert inspect(test_engine).has_table("alembic_version")
+
+
+def test_lifespan_stops_before_migrations_without_jwt_secret(
+    test_engine, monkeypatch
+):
+    monkeypatch.delenv("JWT_SECRET_KEY")
+
+    def migrations_must_not_run(_engine):
+        raise AssertionError("Migrations must not run without the JWT secret.")
+
+    monkeypatch.setattr(main_module, "run_migrations", migrations_must_not_run)
+
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        with TestClient(app):
+            pass
+
+
+def test_lifespan_propagates_postgresql_connection_failure(test_engine, monkeypatch):
+    def fail_connection():
+        raise OperationalError(
+            "connect",
+            {},
+            OSError("simulated PostgreSQL connection failure"),
+        )
+
+    unavailable_engine = create_engine(
+        "postgresql+psycopg://localhost/smartdesk",
+        creator=fail_connection,
+    )
+    monkeypatch.setattr(main_module, "engine", unavailable_engine)
+    try:
+        with pytest.raises(OperationalError, match="simulated PostgreSQL"):
+            with TestClient(app):
+                pass
+    finally:
+        unavailable_engine.dispose()
+
+
 @pytest.fixture()
 def test_engine(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-with-at-least-32-bytes")
@@ -135,6 +224,44 @@ def test_cors_preflight_allows_local_frontend(client):
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_default_cors_origins_include_vercel_frontend():
+    assert main_module.cors_origins_from_environment({}) == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://smartdesk-ai-app.vercel.app",
+    ]
+
+
+def test_cors_origins_include_explicitly_configured_vercel_domains():
+    assert main_module.cors_origins_from_environment(
+        {
+            "CORS_ORIGINS": (
+                " https://smartdesk-ai.vercel.app/ , "
+                "https://preview-smartdesk.vercel.app "
+            )
+        }
+    ) == [
+        "https://smartdesk-ai.vercel.app",
+        "https://preview-smartdesk.vercel.app",
+        "https://smartdesk-ai-app.vercel.app",
+    ]
+
+
+def test_configured_cors_origins_keep_vercel_frontend_without_duplicates():
+    assert main_module.cors_origins_from_environment(
+        {
+            "CORS_ORIGINS": (
+                "https://smartdesk-ai-app.vercel.app/,"
+                "https://other.example,"
+                "https://smartdesk-ai-app.vercel.app"
+            )
+        }
+    ) == [
+        "https://smartdesk-ai-app.vercel.app",
+        "https://other.example",
+    ]
 
 
 def create_role_client(client, session_factory, email, role):

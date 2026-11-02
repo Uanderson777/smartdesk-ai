@@ -23,6 +23,14 @@ export interface Ticket {
   updated_at: string;
 }
 
+export interface TicketTriageResponse {
+  ticket_id: number;
+  category: TicketCategory;
+  priority: TicketPriority;
+  response_draft: string;
+  rationale: string;
+}
+
 export interface User {
   id: number;
   full_name: string | null;

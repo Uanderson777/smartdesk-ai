@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 import os
 
@@ -6,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai.router import router as ai_router
 from app.auth import router as auth_router
 from app.database import engine, get_db, run_migrations
 from app.dependencies import TenantContext, get_tenant_context, require_roles
@@ -19,14 +21,32 @@ from app.schemas import (
 from app.security import get_jwt_secret
 from app.users import router as users_router
 
-CORS_ORIGINS = [
-    origin.strip().rstrip("/")
-    for origin in os.getenv(
+
+VERCEL_FRONTEND_ORIGIN = "https://smartdesk-ai-app.vercel.app"
+
+
+def cors_origins_from_environment(
+    environment: Mapping[str, str] | None = None,
+) -> list[str]:
+    values = os.environ if environment is None else environment
+    configured_origins = values.get(
         "CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
-    ).split(",")
-    if origin.strip()
-]
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        + VERCEL_FRONTEND_ORIGIN,
+    )
+    origins = list(
+        dict.fromkeys(
+            origin.strip().rstrip("/")
+            for origin in configured_origins.split(",")
+            if origin.strip()
+        )
+    )
+    if VERCEL_FRONTEND_ORIGIN not in origins:
+        origins.append(VERCEL_FRONTEND_ORIGIN)
+    return origins
+
+
+CORS_ORIGINS = cors_origins_from_environment()
 
 
 def lock_ticket(
@@ -112,6 +132,7 @@ app.add_middleware(
 )
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(ai_router)
 
 
 @app.get("/", tags=["Health"])
