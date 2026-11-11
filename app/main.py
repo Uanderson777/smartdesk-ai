@@ -35,7 +35,7 @@ def cors_origins_from_environment(
     configured_origins = values.get(
         "CORS_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173,"
-        + VERCEL_FRONTEND_ORIGIN,
+        + VERCEL_FRONTEND_ORIGINS[0],
     )
     origins = list(
         dict.fromkeys(
