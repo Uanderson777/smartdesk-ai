@@ -11,10 +11,11 @@ import type {
   UserRole,
 } from "./types";
 
-export const API_BASE = (
-  import.meta.env.VITE_API_BASE_URL?.trim() ||
-  (import.meta.env.DEV ? "" : "https://smartdesk-ai-0rev.onrender.com")
-).replace(/\/+$/, "");
+// Em produção, use sempre a API oficial. Não permita que uma variável
+// VITE_API_BASE_URL antiga na Vercel faça o frontend voltar para um Render legado.
+export const API_BASE = import.meta.env.DEV
+  ? ""
+  : "https://smartdesk-ai-0rev.onrender.com";
 const API_REQUEST_TIMEOUT_MS = 60_000;
 
 const apiClient = axios.create({
