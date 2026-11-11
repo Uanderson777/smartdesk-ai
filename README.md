@@ -135,9 +135,11 @@ $env:SMARTDESK_API_URL = "http://127.0.0.1:8001"
 npm run dev
 ```
 
-Também é possível definir `VITE_API_BASE_URL` para apontar o frontend
-diretamente a outra API. Variáveis `VITE_` são incorporadas ao build e não
-devem conter segredos.
+Em produção, o frontend usa exclusivamente a API oficial
+`https://smartdesk-ai-0rev.onrender.com`. A URL não é substituída por
+`VITE_API_BASE_URL`, evitando que uma variável antiga cadastrada na Vercel
+aponte novamente para um serviço Render desativado. No desenvolvimento local,
+o proxy do Vite continua usando `SMARTDESK_API_URL` quando configurada.
 
 ## Banco de dados e migrations
 
@@ -213,13 +215,10 @@ O repositório não contém `vercel.json`; configure o projeto no painel da Verc
 - Install Command: `npm install`
 - Build Command: `npm run build`
 - Output Directory: `dist`
-- Environment Variable `VITE_API_BASE_URL` (URL da API, não do frontend):
-  `https://smartdesk-ai-0rev.onrender.com`
-
-Configure a variável na Vercel para Production e para outros ambientes somente
-se necessário. O frontend usa esse endereço como fallback de produção; após
-alterar a variável, faça um novo build/deploy. Não configure `VITE_API_BASE_URL`
-com um endereço da Vercel.
+Não cadastre `VITE_API_BASE_URL` na Vercel. O frontend de produção já aponta
+diretamente para `https://smartdesk-ai-0rev.onrender.com` no código. Se existir
+uma variável antiga `VITE_API_BASE_URL` no painel da Vercel, remova-a para
+evitar confusão em futuras manutenções.
 
 O endereço Production público deve ser confirmado no painel da Vercel antes de
 ser divulgado como URL definitiva. A origem Vercel atualmente incluída por
