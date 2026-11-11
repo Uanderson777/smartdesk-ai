@@ -22,7 +22,10 @@ from app.security import get_jwt_secret
 from app.users import router as users_router
 
 
-VERCEL_FRONTEND_ORIGIN = "https://smartdesk-ai-app.vercel.app"
+VERCEL_FRONTEND_ORIGINS = (
+    "https://smartdesk-ai-app.vercel.app",
+    "https://smartdesk-ai-rfqc.vercel.app",
+)
 
 
 def cors_origins_from_environment(
@@ -41,8 +44,9 @@ def cors_origins_from_environment(
             if origin.strip()
         )
     )
-    if VERCEL_FRONTEND_ORIGIN not in origins:
-        origins.append(VERCEL_FRONTEND_ORIGIN)
+    for origin in VERCEL_FRONTEND_ORIGINS:
+        if origin not in origins:
+            origins.append(origin)
     return origins
 
 
